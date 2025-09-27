@@ -725,7 +725,16 @@ void setup() {
   Serial.printf("Free Heap: %d bytes\n", ESP.getFreeHeap());
   Serial.printf("Free PSRAM: %d bytes\n", ESP.getFreePsram());
   
-  // Initialize class instances
+  // === STAGE 1: BASIC INITIALIZATION (Low Power) ===
+  Serial.println("STAGE 1: Basic system initialization...");
+  
+  // Initialize LED first (minimal power consumption)
+  Serial.println("DEBUG: Initializing LED...");
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, HIGH); // Show we're booting
+  Serial.println("LED initialized - Boot indicator ON");
+  
+  // Initialize basic class instances (no hardware access yet)
   Serial.println("DEBUG: Initializing class instances...");
   circularBuffer = new CircularBuffer(MAX_STORAGE_MB, MIN_FREE_SPACE_MB, ENABLE_CIRCULAR_BUFFER);
   videoUploader = new VideoUploader(UPLOAD_URL, UPLOAD_API_KEY, UPLOAD_CHUNK_SIZE, 
@@ -733,8 +742,77 @@ void setup() {
                                    ENABLE_HTTPS, DELETE_AFTER_UPLOAD);
   Serial.println("DEBUG: Class instances initialized successfully");
   
-  // Initialize the camera with optimized settings
+  // Power stabilization delay
+  Serial.println("DEBUG: Waiting for power stabilization (3 seconds)...");
+  for (int i = 3; i > 0; i--) {
+    Serial.printf("Power stabilization: %d seconds remaining\n", i);
+    delay(1000);
+    // Blink LED to show we're alive
+    digitalWrite(LED_PIN, i % 2);
+  }
+  digitalWrite(LED_PIN, LOW);
+  
+  // === STAGE 2: SD CARD INITIALIZATION ===
+  Serial.println("\nSTAGE 2: SD card initialization...");
+  
+  // Initialize the SD card (moderate power consumption)
+  Serial.println("DEBUG: Initializing SD card...");
+  if (!SD.begin(SD_PIN_CS)) {
+    Serial.println("ERROR: SD card initialization failed!");
+    sd_sign = false;
+  } else {
+    uint8_t cardType = SD.cardType();
+    if(cardType == CARD_NONE){
+      Serial.println("ERROR: No SD card attached");
+      sd_sign = false;
+    } else {
+      Serial.print("SD Card Type: ");
+      if(cardType == CARD_MMC){
+        Serial.println("MMC");
+      } else if(cardType == CARD_SD){
+        Serial.println("SDSC");
+      } else if(cardType == CARD_SDHC){
+        Serial.println("SDHC");
+      } else {
+        Serial.println("UNKNOWN");
+      }
+      sd_sign = true;
+      Serial.println("DEBUG: SD card initialized successfully");
+    }
+  }
+  
+  // Short delay after SD initialization
+  Serial.println("DEBUG: SD initialization complete, brief pause...");
+  delay(500);
+  
+  // === STAGE 3: WIFI INITIALIZATION ===
+  Serial.println("\nSTAGE 3: WiFi initialization...");
+  
+  // Show WiFi starting
+  digitalWrite(LED_PIN, HIGH);
+  
+  // Connect to WiFi (high power consumption during connection)
+  connectToWiFi();
+  
+  // Short delay after WiFi
+  Serial.println("DEBUG: WiFi initialization complete, brief pause...");
+  delay(1000);
+  
+  // === STAGE 4: CAMERA INITIALIZATION (Highest Power) ===
+  Serial.println("\nSTAGE 4: Camera initialization (final stage)...");
+  
+  // Blink LED to show camera init starting
+  for (int i = 0; i < 3; i++) {
+    digitalWrite(LED_PIN, HIGH);
+    delay(100);
+    digitalWrite(LED_PIN, LOW);
+    delay(100);
+  }
+  
+  // Initialize the camera with optimized settings (highest power consumption)
   Serial.println("DEBUG: Initializing camera...");
+  Serial.printf("Pre-camera init - Free Heap: %d, Free PSRAM: %d\n", ESP.getFreeHeap(), ESP.getFreePsram());
+  
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer = LEDC_TIMER_0;
@@ -766,6 +844,9 @@ void setup() {
   if (err != ESP_OK) {
     Serial.printf("ERROR: Camera init failed with error 0x%x\n", err);
     
+    // Brief delay before retry
+    delay(500);
+    
     // Try fallback configuration
     Serial.println("DEBUG: Trying fallback camera configuration...");
     config.frame_size = FRAMESIZE_QQVGA;
@@ -787,40 +868,13 @@ void setup() {
     camera_sign = true;
   }
   
-  // Initialize the SD card
-  Serial.println("DEBUG: Initializing SD card...");
-  if (!SD.begin(SD_PIN_CS)) {
-    Serial.println("ERROR: SD card initialization failed!");
-    sd_sign = false;
-  } else {
-    uint8_t cardType = SD.cardType();
-    if(cardType == CARD_NONE){
-      Serial.println("ERROR: No SD card attached");
-      sd_sign = false;
-    } else {
-      Serial.print("SD Card Type: ");
-      if(cardType == CARD_MMC){
-        Serial.println("MMC");
-      } else if(cardType == CARD_SD){
-        Serial.println("SDSC");
-      } else if(cardType == CARD_SDHC){
-        Serial.println("SDHC");
-      } else {
-        Serial.println("UNKNOWN");
-      }
-      sd_sign = true;
-      Serial.println("DEBUG: SD card initialized successfully");
-    }
-  }
-
-  // Initialize LED
-  Serial.println("DEBUG: Initializing LED...");
-  pinMode(LED_PIN, OUTPUT);
+  Serial.printf("Post-camera init - Free Heap: %d, Free PSRAM: %d\n", ESP.getFreeHeap(), ESP.getFreePsram());
+  
+  // === FINAL STAGE: SYSTEM READY ===
+  Serial.println("\nFINAL STAGE: System ready...");
+  
+  // LED off to show normal operation
   digitalWrite(LED_PIN, LOW);
-  Serial.println("LED initialized");
-
-  // Connect to WiFi and start HTTP server
-  connectToWiFi();
 
   // Print system status
   Serial.println("\n=== ENHANCED SYSTEM STATUS ===");
@@ -836,7 +890,25 @@ void setup() {
 
   recording_active = true; // Start recording by default
   Serial.printf("Video recording will begin in %d seconds\n", captureInterval/1000);
-  Serial.println("=== ENHANCED SETUP COMPLETE ===\n");
+  Serial.println("=== STAGGERED SETUP COMPLETE ===\n");
+  
+  // Final success indication - 3 quick blinks
+  if (camera_sign && sd_sign && wifi_connected) {
+    Serial.println("SUCCESS: All systems operational!");
+    for (int i = 0; i < 6; i++) {
+      digitalWrite(LED_PIN, i % 2);
+      delay(200);
+    }
+  } else {
+    Serial.println("WARNING: Some systems failed to initialize");
+    // Slow blink to indicate partial failure
+    for (int i = 0; i < 4; i++) {
+      digitalWrite(LED_PIN, HIGH);
+      delay(500);
+      digitalWrite(LED_PIN, LOW);
+      delay(500);
+    }
+  }
 }
 
 void loop() {
