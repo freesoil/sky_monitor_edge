@@ -132,11 +132,67 @@ bool VideoUploader::uploadFileInChunks(String filename) {
         return false;
     }
     
-    File file = SD.open(filename.c_str(), FILE_READ);
+    // Normalize filename - ensure it has a leading slash
+    String normalizedFilename = filename;
+    if (!normalizedFilename.startsWith("/")) {
+        normalizedFilename = "/" + normalizedFilename;
+    }
+    
+    Serial.printf("DEBUG: Attempting to open file: '%s' (original: '%s')\n", 
+                  normalizedFilename.c_str(), filename.c_str());
+    
+    // Try to open the file - first with normalized path
+    File file = SD.open(normalizedFilename.c_str(), FILE_READ);
+    
+    // If that fails and the original was different, try original path
+    if (!file && normalizedFilename != filename) {
+        Serial.printf("DEBUG: Trying original path: '%s'\n", filename.c_str());
+        file = SD.open(filename.c_str(), FILE_READ);
+    }
+    
+    // If still no file, try without leading slash
+    if (!file && normalizedFilename.startsWith("/")) {
+        String withoutSlash = normalizedFilename.substring(1);
+        Serial.printf("DEBUG: Trying without leading slash: '%s'\n", withoutSlash.c_str());
+        file = SD.open(withoutSlash.c_str(), FILE_READ);
+    }
+    
     if (!file) {
-        Serial.printf("Failed to open file for upload: %s\n", filename.c_str());
+        Serial.printf("ERROR: Failed to open file for upload after trying multiple paths: %s\n", filename.c_str());
+        // List files to help debug
+        Serial.println("DEBUG: Listing SD card root directory:");
+        File root = SD.open("/");
+        if (root) {
+            Serial.println("DEBUG: Root directory opened successfully");
+            File entry = root.openNextFile();
+            int count = 0;
+            while (entry && count < 20) {
+                if (!entry.isDirectory()) {
+                    Serial.printf("  - Found file: '%s' (size: %lu bytes)\n", entry.name(), (unsigned long)entry.size());
+                } else {
+                    Serial.printf("  - Found directory: '%s'\n", entry.name());
+                }
+                entry.close();
+                entry = root.openNextFile();
+                count++;
+            }
+            root.close();
+            if (count == 0) {
+                Serial.println("DEBUG: No files found in root directory!");
+                Serial.printf("DEBUG: SD card - Total: %llu MB, Used: %llu MB, Free: %llu MB\n",
+                             SD.totalBytes() / (1024*1024),
+                             SD.usedBytes() / (1024*1024),
+                             (SD.totalBytes() - SD.usedBytes()) / (1024*1024));
+            } else {
+                Serial.printf("DEBUG: Listed %d items\n", count);
+            }
+        } else {
+            Serial.println("ERROR: Could not open root directory!");
+        }
         return false;
     }
+    
+    filename = normalizedFilename; // Use normalized filename for rest of function
     
     uploadFileSize = file.size();
     Serial.printf("Starting upload: %s (%.2fMB)\n", filename.c_str(), uploadFileSize / (1024.0 * 1024.0));
@@ -263,7 +319,7 @@ bool VideoUploader::uploadFileInChunks(String filename) {
     
     // Send multipart end
     stream->print(multipart_end);
-    stream->flush(); // Ensure all data is sent
+    stream->clear(); // Ensure all data is sent (updated from deprecated flush())
     
     Serial.printf("Upload data sent: %d bytes\n", totalSent + multipart_start.length() + multipart_end.length());
     

@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Documentation - Edge Monitor</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f6fa;
+            color: #333;
+            line-height: 1.6;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px 0;
+            text-align: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+
+        .nav-links {
+            margin-top: 15px;
+        }
+
+        .nav-links a {
+            color: white;
+            text-decoration: none;
+            margin: 0 15px;
+            padding: 8px 16px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 20px;
+            transition: background 0.3s ease;
+        }
+
+        .nav-links a:hover {
+            background: rgba(255,255,255,0.3);
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 30px 20px;
+        }
+
+        .toc {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }
+
+        .toc h2 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+
+        .toc ul {
+            list-style: none;
+            columns: 2;
+            column-gap: 30px;
+        }
+
+        .toc li {
+            margin-bottom: 8px;
+        }
+
+        .toc a {
+            color: #667eea;
+            text-decoration: none;
+            padding: 5px 0;
+            display: block;
+            border-bottom: 1px solid transparent;
+            transition: border-color 0.3s ease;
+        }
+
+        .toc a:hover {
+            border-bottom-color: #667eea;
+        }
+
+        .api-section {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+            border-left: 4px solid #667eea;
+        }
+
+        .api-section h2 {
+            color: #667eea;
+            margin-bottom: 20px;
+            font-size: 1.8rem;
+        }
+
+        .endpoint {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            border-left: 4px solid #28a745;
+        }
+
+        .endpoint h3 {
+            color: #333;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .method {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+
+        .method.get {
+            background: #28a745;
+            color: white;
+        }
+
+        .method.post {
+            background: #007bff;
+            color: white;
+        }
+
+        .endpoint-path {
+            font-family: 'Courier New', monospace;
+            background: #e9ecef;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 1rem;
+            margin-bottom: 15px;
+            display: block;
+            word-break: break-all;
+        }
+
+        .description {
+            margin-bottom: 15px;
+            color: #666;
+        }
+
+        .params, .response, .example {
+            margin-bottom: 15px;
+        }
+
+        .params h4, .response h4, .example h4 {
+            color: #333;
+            margin-bottom: 8px;
+            font-size: 1rem;
+        }
+
+        .code-block {
+            background: #2c3e50;
+            color: #ecf0f1;
+            padding: 15px;
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+            overflow-x: auto;
+            white-space: pre-wrap;
+        }
+
+        .param-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+
+        .param-table th,
+        .param-table td {
+            padding: 8px 12px;
+            text-align: left;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .param-table th {
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .param-table td {
+            color: #666;
+        }
+
+        .try-it {
+            background: #e8f4fd;
+            border: 1px solid #bee5eb;
+            border-radius: 6px;
+            padding: 15px;
+            margin-top: 15px;
+        }
+
+        .try-it h4 {
+            color: #0c5460;
+            margin-bottom: 10px;
+        }
+
+        .try-button {
+            background: #17a2b8;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: background 0.3s ease;
+        }
+
+        .try-button:hover {
+            background: #138496;
+        }
+
+        .response-display {
+            margin-top: 10px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.8rem;
+            max-height: 200px;
+            overflow-y: auto;
+            display: none;
+        }
+
+        @media (max-width: 768px) {
+            .toc ul {
+                columns: 1;
+            }
+            
+            .header h1 {
+                font-size: 2rem;
+            }
+            
+            .endpoint h3 {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 5px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📚 API Documentation</h1>
+        <p>Complete reference for the Edge Monitor REST API</p>
+        <div class="nav-links">
+            <a href="/">🏠 Home</a>
+            <a href="/camera-control">📹 Camera Control</a>
+            <a href="/system-status">📊 System Status</a>
+            <a href="/api/info">🔗 JSON API</a>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Table of Contents -->
+        <div class="toc">
+            <h2>📋 Table of Contents</h2>
+            <ul>
+                <li><a href="#overview">API Overview</a></li>
+                <li><a href="#authentication">Authentication</a></li>
+                <li><a href="#discovery">Device Discovery</a></li>
+                <li><a href="#status">Device Status</a></li>
+                <li><a href="#camera-settings">Camera Settings</a></li>
+                <li><a href="#recording-config">Recording Configuration</a></li>
+                <li><a href="#commands">Device Commands</a></li>
+                <li><a href="#bulk-settings">Bulk Settings</a></li>
+                <li><a href="#streaming">Camera Streaming</a></li>
+                <li><a href="#uploads">File Uploads</a></li>
+                <li><a href="#error-handling">Error Handling</a></li>
+                <li><a href="#examples">Code Examples</a></li>
+            </ul>
+        </div>
+
+        <!-- API Overview -->
+        <div class="api-section" id="overview">
+            <h2>🌟 API Overview</h2>
+            <p>The Edge Monitor API provides RESTful endpoints for controlling and monitoring ESP32-based edge camera devices. All endpoints return JSON responses and use standard HTTP status codes.</p>
+            
+            <h3>Base URL</h3>
+            <div class="code-block">http://your-server:8000</div>
+            
+            <h3>Content Type</h3>
+            <p>All POST requests should include the header:</p>
+            <div class="code-block">Content-Type: application/json</div>
+        </div>
+
+        <!-- Device Discovery -->
+        <div class="api-section" id="discovery">
+            <h2>🔍 Device Discovery</h2>
+            
+            <div class="endpoint">
+                <h3>
+                    <span class="method post">POST</span>
+                    Discover Edge Devices
+                </h3>
+                <code class="endpoint-path">/api/camera/discover</code>
+                
+                <div class="description">
+                    Scans the local network for ESP32 edge monitoring devices and establishes connections.
+                </div>
+                
+                <div class="response">
+                    <h4>Response:</h4>
+                    <div class="code-block">{
+  "success": true,
+  "device_ip": "192.168.1.100:80",
+  "devices": ["192.168.1.100:80", "192.168.1.101:80"]
+}</div>
+                </div>
+                
+                <div class="try-it">
+                    <h4>🧪 Try it out:</h4>
+                    <button class="try-button" onclick="tryDiscovery()">Discover Devices</button>
+                    <div class="response-display" id="discovery-response"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Device Status -->
+        <div class="api-section" id="status">
+            <h2>📊 Device Status</h2>
+            
+            <div class="endpoint">
+                <h3>
+                    <span class="method get">GET</span>
+                    Get Device Status
+                </h3>
+                <code class="endpoint-path">/api/camera/status</code>
+                
+                <div class="description">
+                    Retrieves comprehensive status information from the connected edge device.
+                </div>
+                
+                <div class="response">
+                    <h4>Response:</h4>
+                    <div class="code-block">{
+  "success": true,
+  "status": {
+    "device_type": "edge_monitor",
+    "wifi_connected": true,
+    "is_recording": false,
+    "camera_ready": true,
+    "sd_ready": true,
+    "free_heap": 245760,
+    "uptime": 1234567,
+    "file_count": 15,
+    "storage_used": 125,
+    "settings": {
+      "framesize": 6,
+      "quality": 15,
+      "capture_interval": 60,
+      "capture_duration": 10
+    }
+  }
+}</div>
+                </div>
+                
+                <div class="try-it">
+                    <h4>🧪 Try it out:</h4>
+                    <button class="try-button" onclick="tryStatus()">Get Status</button>
+                    <div class="response-display" id="status-response"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Camera Settings -->
+        <div class="api-section" id="camera-settings">
+            <h2>📹 Camera Settings</h2>
+            
+            <div class="endpoint">
+                <h3>
+                    <span class="method post">POST</span>
+                    Update Camera Setting
+                </h3>
+                <code class="endpoint-path">/api/camera/setting</code>
+                
+                <div class="description">
+                    Updates individual camera parameters such as frame size, quality, brightness, etc.
+                </div>
+                
+                <div class="params">
+                    <h4>Parameters:</h4>
+                    <table class="param-table">
+                        <tr>
+                            <th>Parameter</th>
+                            <th>Type</th>
+                            <th>Description</th>
+                            <th>Example Values</th>
+                        </tr>
+                        <tr>
+                            <td>setting</td>
+                            <td>string</td>
+                            <td>Camera parameter name</td>
+                            <td>framesize, quality, brightness, contrast, saturation</td>
+                        </tr>
+                        <tr>
+                            <td>value</td>
+                            <td>integer</td>
+                            <td>New value for the parameter</td>
+                            <td>0-12 (framesize), 4-63 (quality), -2 to 2 (others)</td>
+                        </tr>
+                    </table>
+                </div>
+                
+                <div class="example">
+                    <h4>Request Example:</h4>
+                    <div class="code-block">{
+  "setting": "framesize",
+  "value": 6
+}</div>
+                </div>
+                
+                <div class="try-it">
+                    <h4>🧪 Try it out:</h4>
+                    <select id="setting-select">
+                        <option value="framesize">Frame Size</option>
+                        <option value="quality">Quality</option>
+                        <option value="brightness">Brightness</option>
+                        <option value="contrast">Contrast</option>
+                        <option value="saturation">Saturation</option>
+                    </select>
+                    <input type="number" id="setting-value" placeholder="Value" min="-2" max="63">
+                    <button class="try-button" onclick="trySetting()">Update Setting</button>
+                    <div class="response-display" id="setting-response"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Device Commands -->
+        <div class="api-section" id="commands">
+            <h2>🎮 Device Commands</h2>
+            
+            <div class="endpoint">
+                <h3>
+                    <span class="method post">POST</span>
+                    Send Device Command
+                </h3>
+                <code class="endpoint-path">/api/camera/command</code>
+                
+                <div class="description">
+                    Sends control commands to the edge device for recording management and system control.
+                </div>
+                
+                <div class="params">
+                    <h4>Available Commands:</h4>
+                    <table class="param-table">
+                        <tr>
+                            <th>Command</th>
+                            <th>Description</th>
+                            <th>Effect</th>
+                        </tr>
+                        <tr>
+                            <td>start</td>
+                            <td>Start recording</td>
+                            <td>Begins video capture according to configured intervals</td>
+                        </tr>
+                        <tr>
+                            <td>stop</td>
+                            <td>Stop recording</td>
+                            <td>Halts all video capture operations</td>
+                        </tr>
+                        <tr>
+                            <td>pause</td>
+                            <td>Pause/resume system</td>
+                            <td>Toggles system pause state</td>
+                        </tr>
+                        <tr>
+                            <td>restart</td>
+                            <td>Restart device</td>
+                            <td>Performs a complete system restart</td>
+                        </tr>
+                        <tr>
+                            <td>photo</td>
+                            <td>Capture single photo</td>
+                            <td>Takes one photo and saves to SD card</td>
+                        </tr>
+                    </table>
+                </div>
+                
+                <div class="try-it">
+                    <h4>🧪 Try it out:</h4>
+                    <select id="command-select">
+                        <option value="start">Start Recording</option>
+                        <option value="stop">Stop Recording</option>
+                        <option value="pause">Pause/Resume</option>
+                        <option value="photo">Take Photo</option>
+                        <option value="restart">Restart Device</option>
+                    </select>
+                    <button class="try-button" onclick="tryCommand()">Send Command</button>
+                    <div class="response-display" id="command-response"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Camera Streaming -->
+        <div class="api-section" id="streaming">
+            <h2>📺 Camera Streaming</h2>
+            
+            <div class="endpoint">
+                <h3>
+                    <span class="method get">GET</span>
+                    Get Camera Image
+                </h3>
+                <code class="endpoint-path">/api/camera/stream</code>
+                
+                <div class="description">
+                    Retrieves a live JPEG image from the connected camera device.
+                </div>
+                
+                <div class="response">
+                    <h4>Response:</h4>
+                    <p>Returns a JPEG image with Content-Type: image/jpeg</p>
+                </div>
+                
+                <div class="try-it">
+                    <h4>🧪 Try it out:</h4>
+                    <button class="try-button" onclick="tryStream()">Get Camera Image</button>
+                    <div id="stream-display" style="margin-top: 10px; text-align: center;"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Error Handling -->
+        <div class="api-section" id="error-handling">
+            <h2>⚠️ Error Handling</h2>
+            <p>The API uses standard HTTP status codes and returns error information in JSON format:</p>
+            
+            <h3>Status Codes</h3>
+            <table class="param-table">
+                <tr>
+                    <th>Code</th>
+                    <th>Meaning</th>
+                    <th>Description</th>
+                </tr>
+                <tr>
+                    <td>200</td>
+                    <td>OK</td>
+                    <td>Request successful</td>
+                </tr>
+                <tr>
+                    <td>400</td>
+                    <td>Bad Request</td>
+                    <td>Invalid request parameters</td>
+                </tr>
+                <tr>
+                    <td>503</td>
+                    <td>Service Unavailable</td>
+                    <td>No device connected or device unreachable</td>
+                </tr>
+                <tr>
+                    <td>500</td>
+                    <td>Internal Server Error</td>
+                    <td>Server-side error occurred</td>
+                </tr>
+            </table>
+            
+            <h3>Error Response Format</h3>
+            <div class="code-block">{
+  "success": false,
+  "error": "Error description",
+  "detail": "Additional error details"
+}</div>
+        </div>
+
+        <!-- Code Examples -->
+        <div class="api-section" id="examples">
+            <h2>💻 Code Examples</h2>
+            
+            <h3>JavaScript/Fetch</h3>
+            <div class="code-block">// Discover devices
+fetch('/api/camera/discover', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' }
+})
+.then(response => response.json())
+.then(data => console.log(data));
+
+// Get device status
+fetch('/api/camera/status')
+.then(response => response.json())
+.then(data => console.log(data));
+
+// Update camera setting
+fetch('/api/camera/setting', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    setting: 'quality',
+    value: 10
+  })
+})
+.then(response => response.json())
+.then(data => console.log(data));</div>
+
+            <h3>Python/Requests</h3>
+            <div class="code-block">import requests
+
+# Discover devices
+response = requests.post('http://your-server:8000/api/camera/discover')
+print(response.json())
+
+# Get device status
+response = requests.get('http://your-server:8000/api/camera/status')
+print(response.json())
+
+# Send command
+response = requests.post('http://your-server:8000/api/camera/command', 
+                        json={'command': 'start'})
+print(response.json())</div>
+
+            <h3>curl</h3>
+            <div class="code-block"># Discover devices
+curl -X POST http://your-server:8000/api/camera/discover
+
+# Get status
+curl http://your-server:8000/api/camera/status
+
+# Update setting
+curl -X POST http://your-server:8000/api/camera/setting \
+  -H "Content-Type: application/json" \
+  -d '{"setting": "framesize", "value": 6}'</div>
+        </div>
+    </div>
+
+    <script>
+        async function tryDiscovery() {
+            const responseDiv = document.getElementById('discovery-response');
+            responseDiv.style.display = 'block';
+            responseDiv.textContent = 'Discovering devices...';
+            
+            try {
+                const response = await fetch('/api/camera/discover', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await response.json();
+                responseDiv.textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                responseDiv.textContent = `Error: ${error.message}`;
+            }
+        }
+
+        async function tryStatus() {
+            const responseDiv = document.getElementById('status-response');
+            responseDiv.style.display = 'block';
+            responseDiv.textContent = 'Getting status...';
+            
+            try {
+                const response = await fetch('/api/camera/status');
+                const data = await response.json();
+                responseDiv.textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                responseDiv.textContent = `Error: ${error.message}`;
+            }
+        }
+
+        async function trySetting() {
+            const setting = document.getElementById('setting-select').value;
+            const value = parseInt(document.getElementById('setting-value').value);
+            const responseDiv = document.getElementById('setting-response');
+            
+            if (isNaN(value)) {
+                responseDiv.style.display = 'block';
+                responseDiv.textContent = 'Please enter a valid number';
+                return;
+            }
+            
+            responseDiv.style.display = 'block';
+            responseDiv.textContent = 'Updating setting...';
+            
+            try {
+                const response = await fetch('/api/camera/setting', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ setting, value })
+                });
+                const data = await response.json();
+                responseDiv.textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                responseDiv.textContent = `Error: ${error.message}`;
+            }
+        }
+
+        async function tryCommand() {
+            const command = document.getElementById('command-select').value;
+            const responseDiv = document.getElementById('command-response');
+            
+            if (command === 'restart' && !confirm('This will restart the device. Continue?')) {
+                return;
+            }
+            
+            responseDiv.style.display = 'block';
+            responseDiv.textContent = 'Sending command...';
+            
+            try {
+                const response = await fetch('/api/camera/command', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ command })
+                });
+                const data = await response.json();
+                responseDiv.textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                responseDiv.textContent = `Error: ${error.message}`;
+            }
+        }
+
+        async function tryStream() {
+            const displayDiv = document.getElementById('stream-display');
+            displayDiv.innerHTML = 'Loading camera image...';
+            
+            try {
+                const timestamp = new Date().getTime();
+                const img = document.createElement('img');
+                img.src = `/api/camera/stream?t=${timestamp}`;
+                img.style.maxWidth = '100%';
+                img.style.border = '2px solid #667eea';
+                img.style.borderRadius = '8px';
+                img.onload = () => {
+                    displayDiv.innerHTML = '';
+                    displayDiv.appendChild(img);
+                };
+                img.onerror = () => {
+                    displayDiv.innerHTML = '❌ Failed to load camera image';
+                };
+            } catch (error) {
+                displayDiv.innerHTML = `❌ Error: ${error.message}`;
+            }
+        }
+    </script>
+</body>
+</html> 

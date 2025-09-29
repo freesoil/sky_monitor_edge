@@ -25,8 +25,8 @@ const int SD_PIN_CS = 21;
 const int LED_PIN = LED_BUILTIN; // Built-in LED on XIAO ESP32S3
 
 // WiFi Configuration
-const char* WIFI_SSID = "WIFI SSID";        // Replace with your WiFi SSID
-const char* WIFI_PASSWORD = "WIFI Password"; // Replace with your WiFi password
+const char* WIFI_SSID = "wwddOhYeah!";        // Replace with your WiFi SSID
+const char* WIFI_PASSWORD = "wawadudu"; // Replace with your WiFi password
 
 // Upload Configuration
 const char* UPLOAD_URL = "http://192.168.1.57:8000/upload"; // Replace with your upload endpoint

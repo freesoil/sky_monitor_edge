@@ -1,0 +1,979 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Edge Monitor Camera Control</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(90deg, #4CAF50, #45a049);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            margin-bottom: 10px;
+        }
+        
+        .status-bar {
+            background: #f8f9fa;
+            padding: 15px;
+            border-bottom: 1px solid #dee2e6;
+            display: flex;
+            justify-content: space-between;
+            flex-wrap: wrap;
+        }
+        
+
+        .discovery-status {
+            background: #e3f2fd;
+            padding: 10px;
+            border-bottom: 1px solid #bbdefb;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .discovery-indicator {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .discovery-spinner {
+            width: 20px;
+            height: 20px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #2196F3;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .discovery-btn {
+            background: #2196F3;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        
+        .discovery-btn:hover {
+            background: #1976D2;
+        }
+        
+        .discovery-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .status-item {
+            display: flex;
+            align-items: center;
+            margin: 5px;
+        }
+        
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        
+        .status-online { background: #28a745; }
+        .status-offline { background: #dc3545; }
+        .status-recording { background: #ffc107; }
+        
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 400px;
+            gap: 20px;
+            padding: 20px;
+        }
+        
+        .video-section {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+        }
+        
+        .video-container {
+            position: relative;
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
+            margin-bottom: 20px;
+        }
+        
+        .video-stream {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        
+        .video-overlay {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        
+        .controls-section {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        .control-panel {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+        }
+        
+        .control-panel h3 {
+            margin-bottom: 15px;
+            color: #333;
+            border-bottom: 2px solid #4CAF50;
+            padding-bottom: 5px;
+        }
+        
+        .control-group {
+            margin-bottom: 15px;
+        }
+        
+        .control-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: #555;
+        }
+        
+        .control-group select,
+        .control-group input {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        
+        .control-group input[type="range"] {
+            padding: 0;
+            height: 25px;
+        }
+        
+        .range-value {
+            display: inline-block;
+            margin-left: 10px;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+        
+        .button-group {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        
+        .btn {
+            padding: 12px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+        }
+        
+        .btn-primary {
+            background: #4CAF50;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #45a049;
+            transform: translateY(-2px);
+        }
+        
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background: #c82333;
+            transform: translateY(-2px);
+        }
+        
+        .btn-warning {
+            background: #ffc107;
+            color: #212529;
+        }
+        
+        .btn-warning:hover {
+            background: #e0a800;
+            transform: translateY(-2px);
+        }
+        
+        .btn-info {
+            background: #17a2b8;
+            color: white;
+        }
+        
+        .btn-info:hover {
+            background: #138496;
+            transform: translateY(-2px);
+        }
+        
+        .btn-full {
+            grid-column: 1 / -1;
+        }
+        
+        .log-panel {
+            background: #1e1e1e;
+            color: #00ff00;
+            border-radius: 8px;
+            padding: 15px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            height: 200px;
+            overflow-y: auto;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        
+        .stat-item {
+            background: white;
+            padding: 10px;
+            border-radius: 4px;
+            text-align: center;
+            border: 1px solid #ddd;
+        }
+        
+        .stat-value {
+            font-size: 18px;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+        
+        .stat-label {
+            font-size: 12px;
+            color: #666;
+            margin-top: 2px;
+        }
+        
+        @media (max-width: 768px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+            
+            .button-group {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 15px 20px;
+            border-radius: 4px;
+            color: white;
+            font-weight: 500;
+            z-index: 1000;
+            transform: translateX(400px);
+            transition: transform 0.3s ease;
+        }
+        
+        .notification.show {
+            transform: translateX(0);
+        }
+        
+        .notification.success {
+            background: #28a745;
+        }
+        
+        .notification.error {
+            background: #dc3545;
+        }
+        
+        .notification.warning {
+            background: #ffc107;
+            color: #212529;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎥 Edge Monitor Camera Control</h1>
+            <p>Real-time camera configuration and monitoring system</p>
+        </div>
+        
+        <div class="status-bar">
+            <div class="status-item">
+                <div class="status-dot" id="camera-status"></div>
+                <span>Camera: <span id="camera-status-text">Disconnected</span></span>
+    
+        <div class="discovery-status" id="discoveryStatus">
+            <div class="discovery-indicator">
+                <span id="discoveryText">Device Status: Checking...</span>
+                <div class="discovery-spinner" id="discoverySpinner" style="display: none;"></div>
+            </div>
+            <button class="discovery-btn" id="discoveryBtn" onclick="startDeviceDiscovery()">
+                Discover Devices
+            </button>
+        </div>
+        </div>
+            <div class="status-item">
+                <div class="status-dot" id="wifi-status"></div>
+                <span>WiFi: <span id="wifi-status-text">Unknown</span></span>
+            </div>
+            <div class="status-item">
+                <div class="status-dot" id="recording-status"></div>
+                <span>Recording: <span id="recording-status-text">Stopped</span></span>
+            </div>
+            <div class="status-item">
+                <span>Last Update: <span id="last-update">Never</span></span>
+            </div>
+        </div>
+        
+        <div class="main-content">
+            <div class="video-section">
+                <h3>Live Preview</h3>
+                <div class="video-container">
+                    <img id="video-stream" class="video-stream" src="/static/placeholder-camera.png" alt="Camera Stream">
+                    <div class="video-overlay" id="video-overlay">
+                        Waiting for stream...
+                    </div>
+                </div>
+                
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-value" id="frame-rate">0</div>
+                        <div class="stat-label">FPS</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="resolution">Unknown</div>
+                        <div class="stat-label">Resolution</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="file-count">0</div>
+                        <div class="stat-label">Files</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="storage-used">0 MB</div>
+                        <div class="stat-label">Storage</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="controls-section">
+                <!-- Recording Controls -->
+                <div class="control-panel">
+                    <h3>🎬 Recording Control</h3>
+                    <div class="button-group">
+                        <button class="btn btn-primary" onclick="startRecording()">▶ Start Recording</button>
+                        <button class="btn btn-danger" onclick="stopRecording()">⏹ Stop Recording</button>
+                        <button class="btn btn-warning" onclick="pauseRecording()">⏸ Pause</button>
+                        <button class="btn btn-info" onclick="capturePhoto()">📷 Capture Photo</button>
+                    </div>
+                </div>
+                
+                <!-- Camera Settings -->
+                <div class="control-panel">
+                    <h3>📹 Camera Settings</h3>
+                    
+                    <div class="control-group">
+                        <label for="frame-size">Frame Size</label>
+                        <select id="frame-size" onchange="updateCameraSetting('framesize', this.value)">
+                            <option value="13">UXGA (1600x1200)</option>
+                            <option value="12">SXGA (1280x1024)</option>
+                            <option value="11">HD (1280x720)</option>
+                            <option value="10">XGA (1024x768)</option>
+                            <option value="9">SVGA (800x600)</option>
+                            <option value="8" selected>VGA (640x480)</option>
+                            <option value="7">HVGA (480x320)</option>
+                            <option value="6">CIF (400x296)</option>
+                            <option value="5">QVGA (320x240)</option>
+                            <option value="4">HQVGA (240x176)</option>
+                            <option value="3">QCIF (176x144)</option>
+                            <option value="0">QQVGA (160x120)</option>
+                        </select>
+                    </div>
+                    
+                    <div class="control-group">
+                        <label for="quality">JPEG Quality <span class="range-value" id="quality-value">12</span></label>
+                        <input type="range" id="quality" min="4" max="63" value="12" oninput="updateRangeValue('quality'); updateCameraSetting('quality', this.value)">
+                    </div>
+                    
+                    <div class="control-group">
+                        <label for="brightness">Brightness <span class="range-value" id="brightness-value">0</span></label>
+                        <input type="range" id="brightness" min="-2" max="2" value="0" oninput="updateRangeValue('brightness'); updateCameraSetting('brightness', this.value)">
+                    </div>
+                    
+                    <div class="control-group">
+                        <label for="contrast">Contrast <span class="range-value" id="contrast-value">0</span></label>
+                        <input type="range" id="contrast" min="-2" max="2" value="0" oninput="updateRangeValue('contrast'); updateCameraSetting('contrast', this.value)">
+                    </div>
+                    
+                    <div class="control-group">
+                        <label for="saturation">Saturation <span class="range-value" id="saturation-value">0</span></label>
+                        <input type="range" id="saturation" min="-2" max="2" value="0" oninput="updateRangeValue('saturation'); updateCameraSetting('saturation', this.value)">
+                    </div>
+                </div>
+                
+                <!-- Recording Settings -->
+                <div class="control-panel">
+                    <h3>⏱ Recording Settings</h3>
+                    
+                    <div class="control-group">
+                        <label for="capture-interval">Capture Interval (seconds)</label>
+                        <input type="number" id="capture-interval" value="60" min="10" max="3600" onchange="updateRecordingSetting('interval', this.value)">
+                    </div>
+                    
+                    <div class="control-group">
+                        <label for="capture-duration">Capture Duration (seconds)</label>
+                        <input type="number" id="capture-duration" value="10" min="1" max="300" onchange="updateRecordingSetting('duration', this.value)">
+                    </div>
+                    
+                    <div class="control-group">
+                        <label for="stream-interval">Stream Image Every (seconds)</label>
+                        <input type="number" id="stream-interval" value="5" min="1" max="60" onchange="updateRecordingSetting('stream_interval', this.value)">
+                    </div>
+                </div>
+                
+                <!-- System Controls -->
+                <div class="control-panel">
+                    <h3>🔧 System Controls</h3>
+                    <div class="button-group">
+                        <button class="btn btn-info" onclick="getSystemStatus()">🔄 Refresh Status</button>
+                        <button class="btn btn-warning" onclick="restartSystem()">🔄 Restart Device</button>
+                        <button class="btn btn-primary btn-full" onclick="applyAllSettings()">💾 Apply All Settings</button>
+                    </div>
+                </div>
+                
+                <!-- System Log -->
+                <div class="control-panel">
+                    <h3>📋 System Log</h3>
+                    <div class="log-panel" id="system-log">
+                        System initialized...<br>
+                        Waiting for device connection...<br>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global variables
+        let deviceIP = null;
+        let devicePort = null;
+        let streamInterval = null;
+        let statusInterval = null;
+        
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', async function() {
+            const hasDevice = await loadDeviceConfig();
+            if (hasDevice) {
+                initializeControls();
+                startStatusUpdates();
+                updateRangeValues();
+            } else {
+                logMessage('No device configured. Please configure a device on the home page.');
+                updateStatus('camera', 'offline', 'Not Configured');
+            }
+        });
+        
+        async function loadDeviceConfig() {
+            try {
+                const response = await fetch('/api/device/config');
+                const result = await response.json();
+                
+                if (result.success && result.configured && result.device) {
+                    deviceIP = result.device.ip;
+                    devicePort = result.device.port || 80;
+                    
+                    logMessage(`Using configured device: ${deviceIP}:${devicePort}`);
+                    updateStatus('camera', 'online', 'Connected');
+                    return true;
+                } else {
+                    logMessage('No device configured.');
+                    return false;
+                }
+            } catch (error) {
+                logMessage(`Error loading device config: ${error.message}`);
+                return false;
+            }
+        }
+        
+        function initializeControls() {
+            logMessage('Initializing camera control interface...');
+            
+            // Get initial device status
+            getSystemStatus();
+            
+            // Set up stream refresh
+            setStreamRefresh();
+        }
+        
+        function updateRangeValues() {
+            const ranges = ['quality', 'brightness', 'contrast', 'saturation'];
+            ranges.forEach(range => {
+                updateRangeValue(range);
+            });
+        }
+        
+        function updateRangeValue(rangeName) {
+            const range = document.getElementById(rangeName);
+            const valueSpan = document.getElementById(rangeName + '-value');
+            if (range && valueSpan) {
+                valueSpan.textContent = range.value;
+            }
+        }
+        
+        function startStatusUpdates() {
+            statusInterval = setInterval(() => {
+                if (deviceIP) {
+                    getSystemStatus();
+                }
+            }, 5000);
+        }
+        
+        function setStreamRefresh() {
+            const streamImg = document.getElementById('video-stream');
+            const overlay = document.getElementById('video-overlay');
+            
+            if (streamInterval) clearInterval(streamInterval);
+            
+            streamInterval = setInterval(() => {
+                if (deviceIP) {
+                    const timestamp = new Date().getTime();
+                    streamImg.src = `/api/camera/stream?t=${timestamp}`;
+                    overlay.textContent = `Live - ${new Date().toLocaleTimeString()}`;
+                } else {
+                    overlay.textContent = 'Waiting for device...';
+                }
+            }, 2000);
+        }
+        
+        function refreshStream() {
+            // Immediately refresh the camera stream to show updated settings
+            if (deviceIP) {
+                const streamImg = document.getElementById('video-stream');
+                const timestamp = new Date().getTime();
+                streamImg.src = `/api/camera/stream?t=${timestamp}`;
+                logMessage('Camera stream refreshed to show new settings');
+            }
+        }
+        
+        function getSystemStatus() {
+            if (!deviceIP) return;
+            
+            fetch('/api/camera/status')
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    updateSystemStatus(data.status);
+                    document.getElementById('last-update').textContent = new Date().toLocaleTimeString();
+                }
+            })
+            .catch(error => {
+                logMessage(`Status update error: ${error.message}`);
+            });
+        }
+        
+        function updateSystemStatus(status) {
+            // Update status indicators
+            updateStatus('wifi', status.wifi_connected ? 'online' : 'offline', 
+                         status.wifi_connected ? 'Connected' : 'Disconnected');
+            updateStatus('recording', status.is_recording ? 'recording' : 'offline',
+                         status.is_recording ? 'Recording' : 'Stopped');
+            
+            // Update stats
+            document.getElementById('frame-rate').textContent = status.frame_rate || '0';
+            document.getElementById('resolution').textContent = status.resolution || 'Unknown';
+            document.getElementById('file-count').textContent = status.file_count || '0';
+            document.getElementById('storage-used').textContent = `${status.storage_used || 0} MB`;
+            
+            // Update controls with current settings
+            if (status.settings) {
+                updateControlsFromStatus(status.settings);
+            }
+        }
+        
+        function updateControlsFromStatus(settings) {
+            const controls = {
+                'frame-size': settings.framesize,
+                'quality': settings.quality,
+                'brightness': settings.brightness,
+                'contrast': settings.contrast,
+                'saturation': settings.saturation,
+                'capture-interval': settings.capture_interval,
+                'capture-duration': settings.capture_duration,
+                'stream-interval': settings.stream_interval
+            };
+            
+            Object.entries(controls).forEach(([id, value]) => {
+                const element = document.getElementById(id);
+                if (element && value !== undefined) {
+                    element.value = value;
+                    if (element.type === 'range') {
+                        updateRangeValue(id);
+                    }
+                }
+            });
+        }
+        
+        function updateStatus(type, status, text) {
+            const dot = document.getElementById(type + '-status');
+            const textSpan = document.getElementById(type + '-status-text');
+            
+            if (dot) {
+                dot.className = 'status-dot status-' + status;
+            }
+            if (textSpan) {
+                textSpan.textContent = text;
+            }
+        }
+        
+        function updateCameraSetting(setting, value) {
+            if (!deviceIP) {
+                showNotification('Device not connected', 'error');
+                return;
+            }
+            
+            fetch('/api/camera/setting', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    setting: setting,
+                    value: parseInt(value)
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    logMessage(`Updated ${setting} to ${value}`);
+                    showNotification(`${setting} updated successfully`, 'success');
+                    refreshStream(); // Refresh stream to show new settings
+                } else {
+                    logMessage(`Failed to update ${setting}: ${data.error}`);
+                    showNotification(`Failed to update ${setting}`, 'error');
+                }
+            })
+            .catch(error => {
+                logMessage(`Setting update error: ${error.message}`);
+                showNotification('Update failed', 'error');
+            });
+        }
+        
+        function updateRecordingSetting(setting, value) {
+            if (!deviceIP) {
+                showNotification('Device not connected', 'error');
+                return;
+            }
+            
+            fetch('/api/camera/recording-setting', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    setting: setting,
+                    value: parseInt(value)
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    logMessage(`Updated recording ${setting} to ${value}`);
+                    showNotification(`Recording ${setting} updated`, 'success');
+                } else {
+                    logMessage(`Failed to update recording ${setting}: ${data.error}`);
+                    showNotification(`Failed to update recording ${setting}`, 'error');
+                }
+            })
+            .catch(error => {
+                logMessage(`Recording setting error: ${error.message}`);
+                showNotification('Update failed', 'error');
+            });
+        }
+        
+        function startRecording() {
+            sendCommand('start');
+        }
+        
+        function stopRecording() {
+            sendCommand('stop');
+        }
+        
+        function pauseRecording() {
+            sendCommand('pause');
+        }
+        
+        function capturePhoto() {
+            sendCommand('photo');
+        }
+        
+        function restartSystem() {
+            if (confirm('Are you sure you want to restart the device?')) {
+                sendCommand('restart');
+            }
+        }
+        
+        function sendCommand(command) {
+            if (!deviceIP) {
+                showNotification('Device not connected', 'error');
+                return;
+            }
+            
+            fetch('/api/camera/command', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    command: command
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    logMessage(`Command ${command} executed successfully`);
+                    showNotification(`Command ${command} executed`, 'success');
+                    // Refresh status after command
+                    setTimeout(getSystemStatus, 1000);
+                } else {
+                    logMessage(`Command ${command} failed: ${data.error}`);
+                    showNotification(`Command failed`, 'error');
+                }
+            })
+            .catch(error => {
+                logMessage(`Command error: ${error.message}`);
+                showNotification('Command failed', 'error');
+            });
+        }
+        
+        function applyAllSettings() {
+            if (!deviceIP) {
+                showNotification('Device not connected', 'error');
+                return;
+            }
+            
+            const settings = {
+                framesize: parseInt(document.getElementById('frame-size').value),
+                quality: parseInt(document.getElementById('quality').value),
+                brightness: parseInt(document.getElementById('brightness').value),
+                contrast: parseInt(document.getElementById('contrast').value),
+                saturation: parseInt(document.getElementById('saturation').value),
+                capture_interval: parseInt(document.getElementById('capture-interval').value),
+                capture_duration: parseInt(document.getElementById('capture-duration').value),
+                stream_interval: parseInt(document.getElementById('stream-interval').value)
+            };
+            
+            fetch('/api/camera/apply-settings', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(settings)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    logMessage('All settings applied successfully');
+                    showNotification('All settings applied successfully', 'success');
+                    getSystemStatus();
+                } else {
+                    logMessage(`Failed to apply settings: ${data.error}`);
+                    showNotification('Failed to apply settings', 'error');
+                }
+            })
+            .catch(error => {
+                logMessage(`Apply settings error: ${error.message}`);
+                showNotification('Apply settings failed', 'error');
+            });
+        }
+        
+        function logMessage(message) {
+            const log = document.getElementById('system-log');
+            const timestamp = new Date().toLocaleTimeString();
+            log.innerHTML += `[${timestamp}] ${message}<br>`;
+            log.scrollTop = log.scrollHeight;
+        }
+        
+        function showNotification(message, type = 'success') {
+            // Remove existing notification
+            const existing = document.querySelector('.notification');
+            if (existing) {
+                existing.remove();
+            }
+            
+            // Create new notification
+            const notification = document.createElement('div');
+            notification.className = `notification ${type}`;
+            notification.textContent = message;
+            document.body.appendChild(notification);
+            
+            // Show notification
+            setTimeout(() => {
+                notification.classList.add('show');
+            }, 100);
+            
+            // Hide notification after 3 seconds
+            setTimeout(() => {
+                notification.classList.remove('show');
+                setTimeout(() => {
+                    if (notification.parentNode) {
+                        notification.parentNode.removeChild(notification);
+                    }
+                }, 300);
+            }, 3000);
+        }
+        
+        // Cleanup intervals when page unloads
+        window.addEventListener('beforeunload', function() {
+            if (streamInterval) clearInterval(streamInterval);
+            if (statusInterval) clearInterval(statusInterval);
+        });
+    
+    // Device discovery functionality
+    let discoveryInProgress = false;
+    
+    async function startDeviceDiscovery() {
+        if (discoveryInProgress) return;
+        
+        discoveryInProgress = true;
+        const spinner = document.getElementById('discoverySpinner');
+        const text = document.getElementById('discoveryText');
+        const btn = document.getElementById('discoveryBtn');
+        
+        spinner.style.display = 'block';
+        text.textContent = 'Device Status: Discovering devices...';
+        btn.disabled = true;
+        btn.textContent = 'Discovering...';
+        
+        try {
+            const response = await fetch('/api/camera/discover-manual', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                text.textContent = 'Device Status: Discovery started in background';
+                // Poll for discovery status
+                pollDiscoveryStatus();
+            } else {
+                text.textContent = 'Device Status: Discovery failed';
+                spinner.style.display = 'none';
+                btn.disabled = false;
+                btn.textContent = 'Discover Devices';
+            }
+        } catch (error) {
+            text.textContent = 'Device Status: Discovery error';
+            spinner.style.display = 'none';
+            btn.disabled = false;
+            btn.textContent = 'Discover Devices';
+        }
+        
+        discoveryInProgress = false;
+    }
+    
+    async function pollDiscoveryStatus() {
+        const spinner = document.getElementById('discoverySpinner');
+        const text = document.getElementById('discoveryText');
+        const btn = document.getElementById('discoveryBtn');
+        
+        try {
+            const response = await fetch('/api/camera/discovery-status');
+            const status = await response.json();
+            
+            if (status.devices_found > 0) {
+                text.textContent = `Device Status: Found ${status.devices_found} device(s)`;
+                spinner.style.display = 'none';
+                btn.disabled = false;
+                btn.textContent = 'Discover Devices';
+                // Refresh the page to show connected device
+                setTimeout(() => {
+                    location.reload();
+                }, 1000);
+            } else {
+                // Continue polling
+                setTimeout(pollDiscoveryStatus, 2000);
+            }
+        } catch (error) {
+            text.textContent = 'Device Status: Error checking status';
+            spinner.style.display = 'none';
+            btn.disabled = false;
+            btn.textContent = 'Discover Devices';
+        }
+    }
+    
+    // Check discovery status on page load
+    window.addEventListener('load', () => {
+        fetch('/api/camera/discovery-status')
+            .then(response => response.json())
+            .then(status => {
+                const text = document.getElementById('discoveryText');
+                if (status.devices_found > 0) {
+                    text.textContent = `Device Status: ${status.devices_found} device(s) connected`;
+                } else {
+                    text.textContent = 'Device Status: No devices found - Click to discover';
+                }
+            })
+            .catch(error => {
+                const text = document.getElementById('discoveryText');
+                text.textContent = 'Device Status: Error checking status';
+            });
+    });
+</script>
+</body>
+</html> 

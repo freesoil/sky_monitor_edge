@@ -18,6 +18,8 @@
 #include "time.h"
 #include "esp_http_server.h"
 #include "ArduinoJson.h"
+#include "ESPmDNS.h"
+#include <vector>
 
 #define CAMERA_MODEL_XIAO_ESP32S3 // Has PSRAM
 
@@ -32,15 +34,21 @@ const int LED_PIN = LED_BUILTIN; // Built-in LED on XIAO ESP32S3
 const char* WIFI_SSID = "wwddOhYeah!";        
 const char* WIFI_PASSWORD = "wawadudu"; 
 
-// Web Server Configuration
-const char* WEB_SERVER_URL = "http://192.168.1.47:8000"; // Your web server URL
+// Server Configuration - ONLY PLACE TO CHANGE IP
+// const char* IP = "10.190.61.153";
+const char* IP = "192.168.1.57";
+
+const int SERVER_PORT = 8000;
 const int HTTP_PORT = 80;
 
+// Web Server Configuration
+String WEB_SERVER_URL = "http://" + String(IP) + ":" + String(SERVER_PORT);
+
 // Upload Configuration (keeping original functionality)
-const char* UPLOAD_URL = "http://192.168.1.47:8000/upload";
+String UPLOAD_URL = WEB_SERVER_URL + "/upload";
 const char* UPLOAD_API_KEY = "";    
 const long UPLOAD_CHUNK_SIZE = 8192;    
-const long UPLOAD_TIMEOUT_MS = 30000;   
+const long UPLOAD_TIMEOUT_MS = 60000;   
 const int MAX_UPLOAD_RETRIES = 3;       
 const bool ENABLE_HTTPS = false;        
 const bool DELETE_AFTER_UPLOAD = true;  
@@ -96,12 +104,14 @@ struct CameraSettings {
 // Function prototypes
 void startCameraServer();
 void streamImageToServer();
+esp_err_t root_handler(httpd_req_t *req);
 esp_err_t status_handler(httpd_req_t *req);
 esp_err_t control_handler(httpd_req_t *req);
 esp_err_t capture_handler(httpd_req_t *req);
 esp_err_t command_handler(httpd_req_t *req);
 esp_err_t recording_config_handler(httpd_req_t *req);
 esp_err_t apply_settings_handler(httpd_req_t *req);
+esp_err_t files_handler(httpd_req_t *req);
 
 // WiFi and upload functions
 void setupTime() {
@@ -175,6 +185,17 @@ void connectToWiFi() {
     Serial.printf("Signal strength: %d dBm\n", WiFi.RSSI());
     
     setupTime();
+    
+    // Setup mDNS for device discovery
+    if (MDNS.begin("edge-monitor")) {
+      Serial.println("mDNS responder started");
+      MDNS.addService("http", "tcp", HTTP_PORT);
+      MDNS.addServiceTxt("http", "tcp", "device_type", "edge_monitor");
+      MDNS.addServiceTxt("http", "tcp", "version", "1.0");
+    } else {
+      Serial.println("Error setting up mDNS responder!");
+    }
+    
     startCameraServer();
   } else {
     wifi_connected = false;
@@ -277,6 +298,13 @@ void startCameraServer() {
   
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
   config.server_port = HTTP_PORT;
+  config.max_uri_handlers = 10;
+  config.stack_size = 8192;
+  
+  // Performance optimizations - run HTTP server on separate core
+  config.core_id = 0;              // Run on Core 0 (separate from main loop)
+  config.task_priority = 5;        // Higher priority than default (4)
+  config.max_open_sockets = 7;     // Allow more concurrent connections
   
   httpd_uri_t status_uri = {
     .uri       = "/status",
@@ -320,6 +348,21 @@ void startCameraServer() {
     .user_ctx  = NULL
   };
   
+  httpd_uri_t files_uri = {
+    .uri       = "/files",
+    .method    = HTTP_GET,
+    .handler   = files_handler,
+    .user_ctx  = NULL
+  };
+  
+  // Add root endpoint for basic device detection
+  httpd_uri_t root_uri = {
+    .uri       = "/",
+    .method    = HTTP_GET,
+    .handler   = root_handler,
+    .user_ctx  = NULL
+  };
+  
   if (httpd_start(&camera_httpd, &config) == ESP_OK) {
     httpd_register_uri_handler(camera_httpd, &status_uri);
     httpd_register_uri_handler(camera_httpd, &control_uri);
@@ -327,15 +370,35 @@ void startCameraServer() {
     httpd_register_uri_handler(camera_httpd, &command_uri);
     httpd_register_uri_handler(camera_httpd, &recording_config_uri);
     httpd_register_uri_handler(camera_httpd, &apply_settings_uri);
+    httpd_register_uri_handler(camera_httpd, &files_uri);
+    httpd_register_uri_handler(camera_httpd, &root_uri);
     
     Serial.printf("Camera HTTP server started on port %d\n", HTTP_PORT);
+    Serial.printf("Device accessible at: http://%s:%d\n", WiFi.localIP().toString().c_str(), HTTP_PORT);
   } else {
     Serial.println("Failed to start camera HTTP server");
   }
 }
 
+esp_err_t root_handler(httpd_req_t *req) {
+  const char* html = "<!DOCTYPE html><html><head><title>ESP32 Edge Monitor</title></head>"
+                     "<body><h1>ESP32 Edge Monitor Device</h1>"
+                     "<p>Device Type: edge_monitor</p>"
+                     "<p>Status: Online</p>"
+                     "<p>Endpoints:</p><ul>"
+                     "<li><a href='/status'>/status</a> - Device status (JSON)</li>"
+                     "<li><a href='/capture'>/capture</a> - Camera capture</li>"
+                     "</ul></body></html>";
+  
+  httpd_resp_set_type(req, "text/html");
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+  httpd_resp_send(req, html, strlen(html));
+  
+  return ESP_OK;
+}
+
 esp_err_t status_handler(httpd_req_t *req) {
-  DynamicJsonDocument doc(1024);
+  JsonDocument doc;
   
   doc["device_type"] = "edge_monitor";
   doc["wifi_connected"] = wifi_connected;
@@ -349,7 +412,7 @@ esp_err_t status_handler(httpd_req_t *req) {
   doc["storage_used"] = circularBuffer->getVideoStorageUsed() / (1024 * 1024);
   
   // Current settings
-  JsonObject settings = doc.createNestedObject("settings");
+  JsonObject settings = doc["settings"].to<JsonObject>();
   settings["framesize"] = cameraSettings.framesize;
   settings["quality"] = cameraSettings.quality;
   settings["brightness"] = cameraSettings.brightness;
@@ -408,7 +471,7 @@ esp_err_t control_handler(httpd_req_t *req) {
   }
   buf[ret] = '\0';
   
-  DynamicJsonDocument doc(512);
+  JsonDocument doc;
   deserializeJson(doc, buf);
   
   String var = doc["var"];
@@ -436,7 +499,7 @@ esp_err_t control_handler(httpd_req_t *req) {
     cameraSettings.saturation = val;
   }
   
-  DynamicJsonDocument response(256);
+  JsonDocument response;
   response["success"] = (res == 0);
   response["message"] = (res == 0) ? "Setting updated" : "Setting failed";
   
@@ -454,9 +517,19 @@ esp_err_t capture_handler(httpd_req_t *req) {
   camera_fb_t *fb = NULL;
   esp_err_t res = ESP_OK;
   
+  // Don't capture while recording (camera is busy)
+  if (isRecording()) {
+    const char* msg = "Camera busy: recording in progress";
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_send(req, msg, strlen(msg));
+    return ESP_OK;
+  }
+  
   fb = esp_camera_fb_get();
   if (!fb) {
-    Serial.println("Camera capture failed");
+    // Suppress spam - camera busy
+    // Serial.println("Camera capture failed");
     httpd_resp_send_500(req);
     return ESP_FAIL;
   }
@@ -480,7 +553,7 @@ esp_err_t command_handler(httpd_req_t *req) {
   }
   buf[ret] = '\0';
   
-  DynamicJsonDocument doc(256);
+  JsonDocument doc;
   deserializeJson(doc, buf);
   
   String command = doc["command"];
@@ -504,7 +577,7 @@ esp_err_t command_handler(httpd_req_t *req) {
     success = true;
     message = "Restarting system";
     // Send response first, then restart
-    DynamicJsonDocument response(256);
+    JsonDocument response;
     response["success"] = success;
     response["message"] = message;
     String responseStr;
@@ -518,25 +591,133 @@ esp_err_t command_handler(httpd_req_t *req) {
     return ESP_OK;
   } else if (command == "photo") {
     // Capture a single photo
-    camera_fb_t *fb = esp_camera_fb_get();
-    if (fb) {
-      String filename = "/photo_" + String(millis()) + ".jpg";
-      File file = SD.open(filename, FILE_WRITE);
-      if (file) {
-        file.write(fb->buf, fb->len);
-        file.close();
-        success = true;
-        message = "Photo captured: " + filename;
-      } else {
-        message = "Failed to save photo";
-      }
-      esp_camera_fb_return(fb);
+    if (isRecording()) {
+      message = "Cannot capture photo: recording in progress";
     } else {
-      message = "Failed to capture photo";
+      camera_fb_t *fb = esp_camera_fb_get();
+      if (fb) {
+        String filename = "/photo_" + String(millis()) + ".jpg";
+        File file = SD.open(filename, FILE_WRITE);
+        if (file) {
+          file.write(fb->buf, fb->len);
+          file.close();
+          success = true;
+          message = "Photo captured: " + filename;
+        } else {
+          message = "Failed to save photo";
+        }
+        esp_camera_fb_return(fb);
+      } else {
+        message = "Failed to capture photo";
+      }
+    }
+  } else if (command == "list_files") {
+    // List all files on SD card
+    Serial.println("=== MANUAL FILE LIST ===");
+    File root = SD.open("/");
+    if (root) {
+      File entry = root.openNextFile();
+      int count = 0;
+      while (entry && count < 50) {
+        if (!entry.isDirectory()) {
+          Serial.printf("  File: '%s' - %lu bytes\n", entry.name(), (unsigned long)entry.size());
+          count++;
+        }
+        entry.close();
+        entry = root.openNextFile();
+      }
+      root.close();
+      success = true;
+      message = String("Listed ") + count + " files (check Serial Monitor)";
+    } else {
+      message = "Failed to open root directory";
+    }
+  } else if (command == "test_sd") {
+    // Test SD card write/read
+    String testFile = "/sd_test.txt";
+    Serial.println("=== SD CARD TEST ===");
+    
+    // Write test
+    File f = SD.open(testFile, FILE_WRITE);
+    if (f) {
+      String testData = "SD card test at " + String(millis());
+      f.print(testData);
+      f.close();
+      Serial.println("Write: OK");
+      delay(100);
+      
+      // Read test
+      f = SD.open(testFile, FILE_READ);
+      if (f) {
+        String readData = f.readString();
+        f.close();
+        Serial.printf("Read: OK (%d bytes)\n", readData.length());
+        
+        // Delete test
+        if (SD.remove(testFile)) {
+          Serial.println("Delete: OK");
+          success = true;
+          message = "SD card test passed!";
+        } else {
+          message = "SD delete failed";
+        }
+      } else {
+        message = "SD read failed";
+      }
+    } else {
+      message = "SD write failed";
+    }
+  } else if (command == "clear_sd") {
+    // Delete all video files from SD card
+    Serial.println("=== CLEARING SD CARD ===");
+    File root = SD.open("/");
+    if (root) {
+      int deletedCount = 0;
+      int failedCount = 0;
+      
+      // First pass: collect filenames (can't delete while iterating)
+      std::vector<String> filesToDelete;
+      File entry = root.openNextFile();
+      while (entry) {
+        if (!entry.isDirectory()) {
+          String fileName = entry.name();
+          // Delete .avi and .jpg files, but keep system files
+          if (fileName.endsWith(".avi") || fileName.endsWith(".jpg") || 
+              (fileName.startsWith("photo_") && fileName.endsWith(".jpg"))) {
+            filesToDelete.push_back("/" + fileName);
+          }
+        }
+        entry.close();
+        entry = root.openNextFile();
+      }
+      root.close();
+      
+      // Second pass: delete files
+      for (const String& filePath : filesToDelete) {
+        Serial.printf("Deleting: %s\n", filePath.c_str());
+        if (SD.remove(filePath.c_str())) {
+          deletedCount++;
+        } else {
+          Serial.printf("Failed to delete: %s\n", filePath.c_str());
+          failedCount++;
+        }
+      }
+      
+      // Clear upload queue
+      videoUploader->clearUploadQueue();
+      
+      Serial.printf("Deleted: %d files, Failed: %d files\n", deletedCount, failedCount);
+      success = true;
+      message = String("Cleared SD card: deleted ") + deletedCount + " files";
+      if (failedCount > 0) {
+        message += String(", failed: ") + failedCount;
+      }
+    } else {
+      message = "Failed to open root directory";
     }
   }
   
-  DynamicJsonDocument response(256);
+  JsonDocument response;
   response["success"] = success;
   response["message"] = message;
   
@@ -559,7 +740,7 @@ esp_err_t recording_config_handler(httpd_req_t *req) {
   }
   buf[ret] = '\0';
   
-  DynamicJsonDocument doc(512);
+  JsonDocument doc;
   deserializeJson(doc, buf);
   
   String setting = doc["setting"];
@@ -577,7 +758,7 @@ esp_err_t recording_config_handler(httpd_req_t *req) {
     success = true;
   }
   
-  DynamicJsonDocument response(256);
+  JsonDocument response;
   response["success"] = success;
   response["message"] = success ? "Recording setting updated" : "Invalid setting";
   
@@ -600,7 +781,7 @@ esp_err_t apply_settings_handler(httpd_req_t *req) {
   }
   buf[ret] = '\0';
   
-  DynamicJsonDocument doc(1024);
+  JsonDocument doc;
   deserializeJson(doc, buf);
   
   sensor_t *s = esp_camera_sensor_get();
@@ -608,7 +789,7 @@ esp_err_t apply_settings_handler(httpd_req_t *req) {
   String message = "Settings applied successfully";
   
   // Apply camera settings
-  if (doc.containsKey("framesize")) {
+  if (doc["framesize"].is<int>()) {
     int val = doc["framesize"];
     if (s->set_framesize(s, (framesize_t)val) == 0) {
       cameraSettings.framesize = val;
@@ -617,7 +798,7 @@ esp_err_t apply_settings_handler(httpd_req_t *req) {
     }
   }
   
-  if (doc.containsKey("quality")) {
+  if (doc["quality"].is<int>()) {
     int val = doc["quality"];
     if (s->set_quality(s, val) == 0) {
       cameraSettings.quality = val;
@@ -626,7 +807,7 @@ esp_err_t apply_settings_handler(httpd_req_t *req) {
     }
   }
   
-  if (doc.containsKey("brightness")) {
+  if (doc["brightness"].is<int>()) {
     int val = doc["brightness"];
     if (s->set_brightness(s, val) == 0) {
       cameraSettings.brightness = val;
@@ -635,7 +816,7 @@ esp_err_t apply_settings_handler(httpd_req_t *req) {
     }
   }
   
-  if (doc.containsKey("contrast")) {
+  if (doc["contrast"].is<int>()) {
     int val = doc["contrast"];
     if (s->set_contrast(s, val) == 0) {
       cameraSettings.contrast = val;
@@ -644,7 +825,7 @@ esp_err_t apply_settings_handler(httpd_req_t *req) {
     }
   }
   
-  if (doc.containsKey("saturation")) {
+  if (doc["saturation"].is<int>()) {
     int val = doc["saturation"];
     if (s->set_saturation(s, val) == 0) {
       cameraSettings.saturation = val;
@@ -654,15 +835,15 @@ esp_err_t apply_settings_handler(httpd_req_t *req) {
   }
   
   // Apply recording settings
-  if (doc.containsKey("capture_interval")) {
+  if (doc["capture_interval"].is<int>()) {
     captureInterval = doc["capture_interval"].as<int>() * 1000;
   }
   
-  if (doc.containsKey("capture_duration")) {
+  if (doc["capture_duration"].is<int>()) {
     captureDuration = doc["capture_duration"].as<int>() * 1000;
   }
   
-  if (doc.containsKey("stream_interval")) {
+  if (doc["stream_interval"].is<int>()) {
     imageStreamInterval = doc["stream_interval"].as<int>() * 1000;
   }
   
@@ -670,7 +851,7 @@ esp_err_t apply_settings_handler(httpd_req_t *req) {
     message = "Some settings failed to apply";
   }
   
-  DynamicJsonDocument response(256);
+  JsonDocument response;
   response["success"] = success;
   response["message"] = message;
   
@@ -684,31 +865,92 @@ esp_err_t apply_settings_handler(httpd_req_t *req) {
   return ESP_OK;
 }
 
+esp_err_t files_handler(httpd_req_t *req) {
+  JsonDocument doc;
+  JsonArray files = doc["files"].to<JsonArray>();
+  
+  File root = SD.open("/");
+  if (root) {
+    File file = root.openNextFile();
+    int count = 0;
+    while (file && count < 50) {
+      if (!file.isDirectory()) {
+        JsonObject fileObj = files.add<JsonObject>();
+        fileObj["name"] = String(file.name());
+        fileObj["size"] = file.size();
+        fileObj["path"] = "/" + String(file.name());
+      }
+      file.close();
+      file = root.openNextFile();
+      count++;
+    }
+    root.close();
+  }
+  
+  doc["upload_queue_size"] = videoUploader->getQueueSize();
+  doc["total_files"] = files.size();
+  
+  String response;
+  serializeJson(doc, response);
+  
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+  httpd_resp_send(req, response.c_str(), response.length());
+  
+  return ESP_OK;
+}
+
 void streamImageToServer() {
-  if (!wifi_connected || !streamingEnabled) return;
+  if (!wifi_connected || !streamingEnabled) {
+    return;
+  }
   
   unsigned long now = millis();
   if (now - lastImageStream < imageStreamInterval) return;
   
-  // Don't stream while recording
-  if (isRecording()) return;
-  
-  camera_fb_t *fb = esp_camera_fb_get();
-  if (!fb) {
-    Serial.println("Failed to capture image for streaming");
+  // Don't stream while recording or uploading (camera/SD card busy)
+  if (isRecording() || videoUploader->getIsUploading()) {
     return;
   }
   
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (!fb) {
+    // Don't spam error messages - camera might be busy
+    lastImageStream = now;
+    return;
+  }
+  
+  String uploadImageURL = String(WEB_SERVER_URL) + "/api/upload-image";
+  Serial.printf("DEBUG: Streaming image to: %s (size: %d bytes)\n", uploadImageURL.c_str(), fb->len);
+  
   HTTPClient http;
-  http.begin(String(WEB_SERVER_URL) + "/api/upload-image");
+  http.setTimeout(10000); // 10 second timeout
+  
+  if (!http.begin(uploadImageURL)) {
+    Serial.printf("ERROR: Failed to begin HTTP connection to %s\n", uploadImageURL.c_str());
+    esp_camera_fb_return(fb);
+    return;
+  }
+  
   http.addHeader("Content-Type", "image/jpeg");
+  http.addHeader("Content-Length", String(fb->len));
   
   int httpResponseCode = http.POST(fb->buf, fb->len);
   
   if (httpResponseCode > 0) {
-    Serial.printf("Image streamed successfully: %d\n", httpResponseCode);
+    Serial.printf("SUCCESS: Image streamed to server - Response: %d\n", httpResponseCode);
+    if (httpResponseCode == 200) {
+      String response = http.getString();
+      if (response.length() > 0 && response.length() < 200) {
+        Serial.printf("Server response: %s\n", response.c_str());
+      }
+    }
   } else {
-    Serial.printf("Image streaming failed: %d\n", httpResponseCode);
+    Serial.printf("ERROR: Image streaming failed - HTTP error code: %d\n", httpResponseCode);
+    Serial.printf("ERROR: HTTP error: %s\n", http.errorToString(httpResponseCode).c_str());
+    Serial.printf("DEBUG: Server URL: %s\n", WEB_SERVER_URL.c_str());
+    Serial.printf("DEBUG: WiFi connected: %s, RSSI: %d dBm\n", 
+                  wifi_connected ? "YES" : "NO", WiFi.RSSI());
   }
   
   http.end();
@@ -718,7 +960,6 @@ void streamImageToServer() {
 
 void setup() {
   Serial.begin(115200);
-  while(!Serial);
   
   Serial.println("\n\n=== ENHANCED EDGE MONITOR STARTING ===");
   Serial.printf("Compile Time: %s %s\n", __DATE__, __TIME__);
@@ -731,8 +972,13 @@ void setup() {
   // Initialize LED first (minimal power consumption)
   Serial.println("DEBUG: Initializing LED...");
   pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, HIGH); // Show we're booting
-  Serial.println("LED initialized - Boot indicator ON");
+  
+  // STAGE 1 LED PATTERN: Single long blink (2 seconds ON)
+  digitalWrite(LED_PIN, HIGH);
+  Serial.println("LED STAGE 1: Single long blink - Basic init starting");
+  delay(2000);
+  digitalWrite(LED_PIN, LOW);
+  delay(500);
   
   // Initialize basic class instances (no hardware access yet)
   Serial.println("DEBUG: Initializing class instances...");
@@ -742,29 +988,69 @@ void setup() {
                                    ENABLE_HTTPS, DELETE_AFTER_UPLOAD);
   Serial.println("DEBUG: Class instances initialized successfully");
   
-  // Power stabilization delay
+  // STAGE 1 SUCCESS: Two quick blinks
+  Serial.println("LED STAGE 1: Two quick blinks - Basic init SUCCESS");
+  for (int i = 0; i < 2; i++) {
+    digitalWrite(LED_PIN, HIGH);
+    delay(200);
+    digitalWrite(LED_PIN, LOW);
+    delay(200);
+  }
+  
+  // Power stabilization delay with heartbeat pattern
   Serial.println("DEBUG: Waiting for power stabilization (3 seconds)...");
   for (int i = 3; i > 0; i--) {
     Serial.printf("Power stabilization: %d seconds remaining\n", i);
-    delay(1000);
-    // Blink LED to show we're alive
-    digitalWrite(LED_PIN, i % 2);
+    // Heartbeat pattern during stabilization
+    digitalWrite(LED_PIN, HIGH);
+    delay(100);
+    digitalWrite(LED_PIN, LOW);
+    delay(100);
+    digitalWrite(LED_PIN, HIGH);
+    delay(100);
+    digitalWrite(LED_PIN, LOW);
+    delay(700); // Rest of the second
   }
-  digitalWrite(LED_PIN, LOW);
   
   // === STAGE 2: SD CARD INITIALIZATION ===
   Serial.println("\nSTAGE 2: SD card initialization...");
+  
+  // STAGE 2 LED PATTERN: Three quick blinks (SD init starting)
+  Serial.println("LED STAGE 2: Three quick blinks - SD init starting");
+  for (int i = 0; i < 3; i++) {
+    digitalWrite(LED_PIN, HIGH);
+    delay(150);
+    digitalWrite(LED_PIN, LOW);
+    delay(150);
+  }
+  delay(500);
   
   // Initialize the SD card (moderate power consumption)
   Serial.println("DEBUG: Initializing SD card...");
   if (!SD.begin(SD_PIN_CS)) {
     Serial.println("ERROR: SD card initialization failed!");
     sd_sign = false;
+    // STAGE 2 FAILURE: Rapid blinking (10 times)
+    Serial.println("LED STAGE 2: Rapid blinking - SD FAILED");
+    for (int i = 0; i < 10; i++) {
+      digitalWrite(LED_PIN, HIGH);
+      delay(100);
+      digitalWrite(LED_PIN, LOW);
+      delay(100);
+    }
   } else {
     uint8_t cardType = SD.cardType();
     if(cardType == CARD_NONE){
       Serial.println("ERROR: No SD card attached");
       sd_sign = false;
+      // STAGE 2 FAILURE: Rapid blinking (10 times)
+      Serial.println("LED STAGE 2: Rapid blinking - No SD card");
+      for (int i = 0; i < 10; i++) {
+        digitalWrite(LED_PIN, HIGH);
+        delay(100);
+        digitalWrite(LED_PIN, LOW);
+        delay(100);
+      }
     } else {
       Serial.print("SD Card Type: ");
       if(cardType == CARD_MMC){
@@ -778,6 +1064,15 @@ void setup() {
       }
       sd_sign = true;
       Serial.println("DEBUG: SD card initialized successfully");
+      
+      // STAGE 2 SUCCESS: Four quick blinks
+      Serial.println("LED STAGE 2: Four quick blinks - SD SUCCESS");
+      for (int i = 0; i < 4; i++) {
+        digitalWrite(LED_PIN, HIGH);
+        delay(200);
+        digitalWrite(LED_PIN, LOW);
+        delay(200);
+      }
     }
   }
   
@@ -788,11 +1083,40 @@ void setup() {
   // === STAGE 3: WIFI INITIALIZATION ===
   Serial.println("\nSTAGE 3: WiFi initialization...");
   
-  // Show WiFi starting
-  digitalWrite(LED_PIN, HIGH);
+  // STAGE 3 LED PATTERN: Five quick blinks (WiFi init starting)
+  Serial.println("LED STAGE 3: Five quick blinks - WiFi init starting");
+  for (int i = 0; i < 5; i++) {
+    digitalWrite(LED_PIN, HIGH);
+    delay(120);
+    digitalWrite(LED_PIN, LOW);
+    delay(120);
+  }
+  delay(500);
   
   // Connect to WiFi (high power consumption during connection)
+  Serial.println("DEBUG: Starting WiFi connection (HIGH POWER STAGE)...");
   connectToWiFi();
+  
+  // WiFi result LED feedback
+  if (wifi_connected) {
+    // STAGE 3 SUCCESS: Six quick blinks
+    Serial.println("LED STAGE 3: Six quick blinks - WiFi SUCCESS");
+    for (int i = 0; i < 6; i++) {
+      digitalWrite(LED_PIN, HIGH);
+      delay(200);
+      digitalWrite(LED_PIN, LOW);
+      delay(200);
+    }
+  } else {
+    // STAGE 3 FAILURE: Very rapid blinking (15 times)
+    Serial.println("LED STAGE 3: Very rapid blinking - WiFi FAILED");
+    for (int i = 0; i < 15; i++) {
+      digitalWrite(LED_PIN, HIGH);
+      delay(80);
+      digitalWrite(LED_PIN, LOW);
+      delay(80);
+    }
+  }
   
   // Short delay after WiFi
   Serial.println("DEBUG: WiFi initialization complete, brief pause...");
@@ -801,17 +1125,28 @@ void setup() {
   // === STAGE 4: CAMERA INITIALIZATION (Highest Power) ===
   Serial.println("\nSTAGE 4: Camera initialization (final stage)...");
   
-  // Blink LED to show camera init starting
-  for (int i = 0; i < 3; i++) {
+  // STAGE 4 LED PATTERN: Seven quick blinks (Camera init starting - HIGHEST POWER!)
+  Serial.println("LED STAGE 4: Seven quick blinks - Camera init starting (HIGHEST POWER!)");
+  for (int i = 0; i < 7; i++) {
     digitalWrite(LED_PIN, HIGH);
     delay(100);
     digitalWrite(LED_PIN, LOW);
     delay(100);
   }
+  delay(1000); // Longer pause before highest power operation
   
   // Initialize the camera with optimized settings (highest power consumption)
-  Serial.println("DEBUG: Initializing camera...");
-  Serial.printf("Pre-camera init - Free Heap: %d, Free PSRAM: %d\n", ESP.getFreeHeap(), ESP.getFreePsram());
+  Serial.println("DEBUG: Initializing camera (CRITICAL POWER MOMENT)...");
+  size_t psramSize = ESP.getFreePsram();
+  Serial.printf("Pre-camera init - Free Heap: %d, Free PSRAM: %d\n", ESP.getFreeHeap(), psramSize);
+  
+  // Check if PSRAM is available
+  bool hasPSRAM = (psramSize > 0);
+  if (!hasPSRAM) {
+    Serial.println("WARNING: No PSRAM detected! Camera will use lower resolution.");
+    Serial.println("To enable PSRAM in Arduino IDE:");
+    Serial.println("  Tools -> PSRAM -> OPI PSRAM (or Enabled)");
+  }
   
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
@@ -834,38 +1169,65 @@ void setup() {
   config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
-  config.frame_size = (framesize_t)cameraSettings.framesize;
+  
+  // Auto-configure based on PSRAM availability
+  if (hasPSRAM) {
+    Serial.println("PSRAM available - using QVGA resolution");
+    config.frame_size = (framesize_t)cameraSettings.framesize;  // QVGA or higher
+    config.fb_location = CAMERA_FB_IN_PSRAM;
+    config.jpeg_quality = cameraSettings.quality;
+    config.fb_count = 1;
+  } else {
+    Serial.println("No PSRAM - using QQVGA with DRAM");
+    config.frame_size = FRAMESIZE_QQVGA;  // 160x120 (small but works)
+    config.fb_location = CAMERA_FB_IN_DRAM;
+    config.jpeg_quality = 20;  // Lower quality for smaller size
+    config.fb_count = 1;
+    cameraSettings.framesize = FRAMESIZE_QQVGA;
+    cameraSettings.quality = 20;
+  }
+  
   config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
-  config.fb_location = CAMERA_FB_IN_PSRAM;
-  config.jpeg_quality = cameraSettings.quality;
-  config.fb_count = 1;
 
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
-    Serial.printf("ERROR: Camera init failed with error 0x%x\n", err);
+    Serial.printf("\n*** CAMERA INITIALIZATION FAILED ***\n");
+    Serial.printf("Error code: 0x%x\n", err);
+    Serial.println("Possible causes:");
+    Serial.println("  1. PSRAM not enabled (check Arduino IDE Tools -> PSRAM)");
+    Serial.println("  2. Insufficient power supply");
+    Serial.println("  3. Camera module not connected properly");
+    Serial.println("  4. Wrong board selected in Arduino IDE");
+    Serial.println("************************************\n");
     
-    // Brief delay before retry
-    delay(500);
+    camera_sign = false;
     
-    // Try fallback configuration
-    Serial.println("DEBUG: Trying fallback camera configuration...");
-    config.frame_size = FRAMESIZE_QQVGA;
-    config.jpeg_quality = 20;
-    config.fb_location = CAMERA_FB_IN_DRAM;
-    
-    err = esp_camera_init(&config);
-    if (err != ESP_OK) {
-      Serial.printf("ERROR: Fallback camera init also failed: 0x%x\n", err);
-      camera_sign = false;
-    } else {
-      Serial.println("DEBUG: Fallback camera configuration successful!");
-      camera_sign = true;
-      cameraSettings.framesize = FRAMESIZE_QQVGA;
-      cameraSettings.quality = 20;
+    // CAMERA FAILURE LED: Alternating pattern (5 cycles)
+    Serial.println("LED STAGE 4: Alternating pattern - Camera FAILURE");
+    for (int i = 0; i < 5; i++) {
+      digitalWrite(LED_PIN, HIGH);
+      delay(500);
+      digitalWrite(LED_PIN, LOW);
+      delay(500);
     }
   } else {
-    Serial.println("DEBUG: Camera initialized successfully!");
+    Serial.println("✓ Camera initialized successfully!");
+    Serial.printf("  Resolution: %dx%d (%s)\n", 
+                  hasPSRAM ? 320 : 160, 
+                  hasPSRAM ? 240 : 120,
+                  hasPSRAM ? "QVGA/PSRAM" : "QQVGA/DRAM");
+    Serial.printf("  JPEG Quality: %d\n", config.jpeg_quality);
+    Serial.printf("  Frame Buffer: %s\n", hasPSRAM ? "PSRAM" : "DRAM");
     camera_sign = true;
+    
+    // CAMERA SUCCESS: Ten quick blinks
+    Serial.println("LED STAGE 4: Ten quick blinks - Camera SUCCESS");
+    for (int i = 0; i < 10; i++) {
+      digitalWrite(LED_PIN, HIGH);
+      delay(120);
+      digitalWrite(LED_PIN, LOW);
+      delay(120);
+    }
   }
   
   Serial.printf("Post-camera init - Free Heap: %d, Free PSRAM: %d\n", ESP.getFreeHeap(), ESP.getFreePsram());
@@ -892,22 +1254,52 @@ void setup() {
   Serial.printf("Video recording will begin in %d seconds\n", captureInterval/1000);
   Serial.println("=== STAGGERED SETUP COMPLETE ===\n");
   
-  // Final success indication - 3 quick blinks
+  // === FINAL STATUS LED PATTERNS ===
   if (camera_sign && sd_sign && wifi_connected) {
     Serial.println("SUCCESS: All systems operational!");
-    for (int i = 0; i < 6; i++) {
+    // FINAL SUCCESS: Celebration pattern (fast alternating 12 times)
+    Serial.println("LED FINAL: Celebration pattern - ALL SYSTEMS SUCCESS!");
+    for (int i = 0; i < 12; i++) {
       digitalWrite(LED_PIN, i % 2);
-      delay(200);
+      delay(100);
     }
+    // End with LED OFF for normal operation
+    digitalWrite(LED_PIN, LOW);
   } else {
     Serial.println("WARNING: Some systems failed to initialize");
-    // Slow blink to indicate partial failure
-    for (int i = 0; i < 4; i++) {
+    Serial.printf("Status - Camera: %s, SD: %s, WiFi: %s\n", 
+                  camera_sign ? "OK" : "FAIL", 
+                  sd_sign ? "OK" : "FAIL", 
+                  wifi_connected ? "OK" : "FAIL");
+    
+    // PARTIAL FAILURE: SOS pattern (3 short, 3 long, 3 short)
+    Serial.println("LED FINAL: SOS pattern - PARTIAL SYSTEM FAILURE");
+    // 3 short
+    for (int i = 0; i < 3; i++) {
       digitalWrite(LED_PIN, HIGH);
-      delay(500);
+      delay(200);
       digitalWrite(LED_PIN, LOW);
-      delay(500);
+      delay(200);
     }
+    delay(300);
+    // 3 long
+    for (int i = 0; i < 3; i++) {
+      digitalWrite(LED_PIN, HIGH);
+      delay(600);
+      digitalWrite(LED_PIN, LOW);
+      delay(200);
+    }
+    delay(300);
+    // 3 short
+    for (int i = 0; i < 3; i++) {
+      digitalWrite(LED_PIN, HIGH);
+      delay(200);
+      digitalWrite(LED_PIN, LOW);
+      delay(200);
+    }
+    
+    // End with LED OFF
+    digitalWrite(LED_PIN, LOW);
   }
 }
 
@@ -995,6 +1387,7 @@ void loop() {
       
       // Start capturing video frames
       int frame_count = 0;
+      size_t totalBytesWritten = 0;
       unsigned long recordingStartTime = millis();
       while ((millis() - lastCaptureTime) < captureDuration) {
         camera_fb_t *fb = esp_camera_fb_get();
@@ -1002,31 +1395,80 @@ void loop() {
           Serial.println("ERROR: Failed to get framebuffer!");
           break;
         }
-        videoFile.write(fb->buf, fb->len);
+        
+        size_t bytesWritten = videoFile.write(fb->buf, fb->len);
+        if (bytesWritten != fb->len) {
+          Serial.printf("ERROR: Write failed! Expected %d bytes, wrote %d bytes\n", fb->len, bytesWritten);
+        }
+        totalBytesWritten += bytesWritten;
+        
         esp_camera_fb_return(fb);
         frame_count += 1;
+
+        // Flush to SD card every 10 frames to ensure data is written
+        if (frame_count % 10 == 0) {
+          videoFile.flush();
+          delay(1);  // Yields CPU to other tasks including HTTP server
+        }
         
         // Progress indicator every 50 frames
         if (frame_count % 50 == 0) {
-          Serial.printf("Recording progress: %d frames, %lu ms elapsed\n", 
-                        frame_count, millis() - recordingStartTime);
+          Serial.printf("Recording progress: %d frames, %lu ms elapsed, %d bytes written\n", 
+                        frame_count, millis() - recordingStartTime, totalBytesWritten);
         }
       }
       
-      // Close the video file
+      // Flush and close the video file
+      Serial.println("DEBUG: Flushing file buffer...");
+      videoFile.flush();
+      Serial.println("DEBUG: Closing file...");
       videoFile.close();
+      Serial.printf("DEBUG: Total bytes written to file: %d\n", totalBytesWritten);
+      
+      // Critical: Give filesystem time to update before checking
+      Serial.println("DEBUG: Waiting for filesystem to sync...");
+      delay(500);
+      
       unsigned long recordingDuration = millis() - recordingStartTime;
       Serial.printf("*** RECORDING COMPLETED *** Frames: %d, Duration: %lu ms, File: %s\n", 
                     frame_count, recordingDuration, filename.c_str());
       
       // Print updated storage info
+      Serial.println("DEBUG: Checking file on SD card...");
+      
       uint64_t fileSize = 0;
-      File file = SD.open(filename);
+      File file = SD.open(filename, FILE_READ);
       if (file) {
         fileSize = file.size();
         file.close();
+        Serial.printf("✓ Video saved successfully!\n");
+        Serial.printf("  File: %s\n", filename.c_str());
+        Serial.printf("  Size: %.2f MB (%llu bytes)\n", fileSize / (1024.0 * 1024.0), fileSize);
+        Serial.printf("  Frames: %d\n", frame_count);
+        Serial.printf("  Duration: %lu ms\n", recordingDuration);
+      } else {
+        Serial.printf("\n*** CRITICAL ERROR ***\n");
+        Serial.printf("File was written (%d bytes) but cannot be read back!\n", totalBytesWritten);
+        Serial.printf("Filename: %s\n", filename.c_str());
+        Serial.println("This indicates SD card corruption or hardware issue!");
+        Serial.println("Try:");
+        Serial.println("  1. Remove and reinsert SD card");
+        Serial.println("  2. Reformat SD card (FAT32)");
+        Serial.println("  3. Try a different SD card");
+        Serial.println("******************\n");
+        
+        // Try to verify SD card is still accessible
+        uint64_t cardTotal = SD.totalBytes();
+        if (cardTotal == 0) {
+          Serial.println("FATAL: SD card no longer accessible!");
+        }
       }
-      Serial.printf("File size: %.2fMB\n", fileSize / (1024.0 * 1024.0));
+      
+      // Increment and print video count
+      imageCount++;
+      Serial.printf("=== RECORDING SUMMARY ===\n");
+      Serial.printf("Total videos recorded this session: %d\n", imageCount);
+      Serial.printf("========================\n\n");
       
       // Add new video to upload queue
       if (wifi_connected) {
@@ -1036,8 +1478,6 @@ void loop() {
       } else {
         Serial.println("DEBUG: WiFi not connected, video not added to upload queue");
       }
-      
-      imageCount++;
 
       // Resume uploads now that recording is complete
       if (videoUploader->getUploadPaused()) {
@@ -1055,5 +1495,5 @@ void loop() {
   }
   
   // Small delay to prevent excessive CPU usage
-  delay(100);
-}
+  delay(10);   // Reduced from 100ms for better HTTP responsiveness
+} 
