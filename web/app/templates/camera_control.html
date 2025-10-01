@@ -392,7 +392,11 @@
                 <div class="stats-grid">
                     <div class="stat-item">
                         <div class="stat-value" id="frame-rate">0</div>
-                        <div class="stat-label">FPS</div>
+                        <div class="stat-label">Current FPS</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="target-fps-display">0</div>
+                        <div class="stat-label">Target FPS</div>
                     </div>
                     <div class="stat-item">
                         <div class="stat-value" id="resolution">Unknown</div>
@@ -405,6 +409,10 @@
                     <div class="stat-item">
                         <div class="stat-value" id="storage-used">0 MB</div>
                         <div class="stat-label">Storage</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="capture-failures">-</div>
+                        <div class="stat-label">Capture Failures</div>
                     </div>
                 </div>
             </div>
@@ -481,6 +489,14 @@
                     <div class="control-group">
                         <label for="stream-interval">Stream Image Every (seconds)</label>
                         <input type="number" id="stream-interval" value="5" min="1" max="60" onchange="updateRecordingSetting('stream_interval', this.value)">
+                    </div>
+                    
+                    <div class="control-group">
+                        <label for="target-fps">Target FPS (0 = unlimited)</label>
+                        <input type="number" id="target-fps" value="0" min="0" max="60" onchange="updateRecordingSetting('fps', this.value)">
+                        <small style="color: #666; font-size: 11px; display: block; margin-top: 4px;">
+                            Recommended: 5-10 for high res (1024x768+), 15-20 for medium, 0 for low res
+                        </small>
                     </div>
                 </div>
                 
@@ -637,6 +653,29 @@
             document.getElementById('file-count').textContent = status.file_count || '0';
             document.getElementById('storage-used').textContent = `${status.storage_used || 0} MB`;
             
+            // Update FPS display
+            if (status.settings && status.settings.target_fps !== undefined) {
+                const targetFps = status.settings.target_fps || 0;
+                document.getElementById('target-fps-display').textContent = targetFps === 0 ? 'Unlimited' : targetFps;
+            }
+            
+            // Update capture statistics
+            if (status.capture_stats) {
+                const failRate = status.capture_stats.failure_rate || 0;
+                const failDisplay = failRate > 0 ? `${failRate.toFixed(1)}%` : '0%';
+                const failElement = document.getElementById('capture-failures');
+                failElement.textContent = failDisplay;
+                
+                // Color code based on failure rate
+                if (failRate > 10) {
+                    failElement.style.color = '#dc3545';  // Red for critical
+                } else if (failRate > 5) {
+                    failElement.style.color = '#ffc107';  // Yellow for warning
+                } else {
+                    failElement.style.color = '#4CAF50';  // Green for good
+                }
+            }
+            
             // Update controls with current settings
             if (status.settings) {
                 updateControlsFromStatus(status.settings);
@@ -652,7 +691,8 @@
                 'saturation': settings.saturation,
                 'capture-interval': settings.capture_interval,
                 'capture-duration': settings.capture_duration,
-                'stream-interval': settings.stream_interval
+                'stream-interval': settings.stream_interval,
+                'target-fps': settings.target_fps !== undefined ? settings.target_fps : 0
             };
             
             Object.entries(controls).forEach(([id, value]) => {
@@ -812,7 +852,8 @@
                 saturation: parseInt(document.getElementById('saturation').value),
                 capture_interval: parseInt(document.getElementById('capture-interval').value),
                 capture_duration: parseInt(document.getElementById('capture-duration').value),
-                stream_interval: parseInt(document.getElementById('stream-interval').value)
+                stream_interval: parseInt(document.getElementById('stream-interval').value),
+                fps: parseInt(document.getElementById('target-fps').value)
             };
             
             fetch('/api/camera/apply-settings', {
@@ -828,6 +869,7 @@
                     logMessage('All settings applied successfully');
                     showNotification('All settings applied successfully', 'success');
                     getSystemStatus();
+                    refreshStream();
                 } else {
                     logMessage(`Failed to apply settings: ${data.error}`);
                     showNotification('Failed to apply settings', 'error');

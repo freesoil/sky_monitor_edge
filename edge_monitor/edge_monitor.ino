@@ -20,6 +20,7 @@
 #include "ArduinoJson.h"
 #include "ESPmDNS.h"
 #include <vector>
+#include <Preferences.h>  // For persistent settings storage
 
 #define CAMERA_MODEL_XIAO_ESP32S3 // Has PSRAM
 
@@ -92,18 +93,44 @@ bool ledState = false;
 int flashCount = 0;                         
 unsigned long flashStartTime = 0;          
 
+// Preferences object for persistent storage
+Preferences preferences;
+
 // Camera settings structure
 struct CameraSettings {
-  int framesize = FRAMESIZE_QVGA;
-  int quality = 15;
+  int framesize = FRAMESIZE_HD;  // 1280x720 - Changed to HD as default
+  int quality = 20;              // Quality for HD
   int brightness = 0;
   int contrast = 0;
   int saturation = 0;
 } cameraSettings;
 
+// High resolution support configuration
+const int HIGH_RES_THRESHOLD = FRAMESIZE_SVGA;  // 800x600
+const int VERY_HIGH_RES_THRESHOLD = FRAMESIZE_SXGA; // 1280x1024
+const int HIGH_RES_QUALITY = 25;  // Lower quality for high res (higher number = lower quality)
+const int VERY_HIGH_RES_QUALITY = 35; // Even lower quality for very high res
+const int HIGH_RES_FB_COUNT = 2;  // Use 2 frame buffers for high res
+const int NORMAL_FB_COUNT = 1;    // Normal frame buffer count
+
+// FPS control (milliseconds delay between frames)
+unsigned long frameDelayMs = 0;  // 0 = max FPS, 33 = ~30fps, 66 = ~15fps, 100 = ~10fps
+unsigned long targetFPS = 0;     // 0 = unlimited, set via API
+
+// Error tracking for capture failures
+struct CaptureStats {
+  unsigned long totalCaptures = 0;
+  unsigned long failedCaptures = 0;
+  unsigned long lastFailureTime = 0;
+  int consecutiveFailures = 0;
+  bool degradedMode = false;  // Auto-downgrade resolution on failures
+} captureStats;
+
 // Function prototypes
 void startCameraServer();
 void streamImageToServer();
+void saveSettings();
+void loadSettings();
 esp_err_t root_handler(httpd_req_t *req);
 esp_err_t status_handler(httpd_req_t *req);
 esp_err_t control_handler(httpd_req_t *req);
@@ -112,6 +139,50 @@ esp_err_t command_handler(httpd_req_t *req);
 esp_err_t recording_config_handler(httpd_req_t *req);
 esp_err_t apply_settings_handler(httpd_req_t *req);
 esp_err_t files_handler(httpd_req_t *req);
+
+// Settings persistence functions
+void saveSettings() {
+  Serial.println("\n=== SAVING SETTINGS TO FLASH ===");
+  preferences.begin("camera", false); // false = read/write mode
+  
+  preferences.putInt("framesize", cameraSettings.framesize);
+  preferences.putInt("quality", cameraSettings.quality);
+  preferences.putInt("brightness", cameraSettings.brightness);
+  preferences.putInt("contrast", cameraSettings.contrast);
+  preferences.putInt("saturation", cameraSettings.saturation);
+  preferences.putULong("capInterval", captureInterval);
+  preferences.putULong("capDuration", captureDuration);
+  preferences.putULong("streamInt", imageStreamInterval);
+  preferences.putULong("targetFPS", targetFPS);
+  preferences.putULong("frameDelay", frameDelayMs);
+  
+  preferences.end();
+  Serial.printf("Settings saved: framesize=%d, quality=%d, fps=%lu\n", 
+                cameraSettings.framesize, cameraSettings.quality, targetFPS);
+  Serial.println("================================\n");
+}
+
+void loadSettings() {
+  Serial.println("\n=== LOADING SETTINGS FROM FLASH ===");
+  preferences.begin("camera", true); // true = read-only mode
+  
+  // Load with defaults if not found
+  cameraSettings.framesize = preferences.getInt("framesize", FRAMESIZE_HD);
+  cameraSettings.quality = preferences.getInt("quality", 20);
+  cameraSettings.brightness = preferences.getInt("brightness", 0);
+  cameraSettings.contrast = preferences.getInt("contrast", 0);
+  cameraSettings.saturation = preferences.getInt("saturation", 0);
+  captureInterval = preferences.getULong("capInterval", 60000);
+  captureDuration = preferences.getULong("capDuration", 10000);
+  imageStreamInterval = preferences.getULong("streamInt", 5000);
+  targetFPS = preferences.getULong("targetFPS", 0);
+  frameDelayMs = preferences.getULong("frameDelay", 0);
+  
+  preferences.end();
+  Serial.printf("Settings loaded: framesize=%d, quality=%d, fps=%lu\n", 
+                cameraSettings.framesize, cameraSettings.quality, targetFPS);
+  Serial.println("===================================\n");
+}
 
 // WiFi and upload functions
 void setupTime() {
@@ -411,6 +482,16 @@ esp_err_t status_handler(httpd_req_t *req) {
   doc["file_count"] = circularBuffer->countVideoFiles();
   doc["storage_used"] = circularBuffer->getVideoStorageUsed() / (1024 * 1024);
   
+  // Capture statistics
+  JsonObject stats = doc["capture_stats"].to<JsonObject>();
+  stats["total_captures"] = captureStats.totalCaptures;
+  stats["failed_captures"] = captureStats.failedCaptures;
+  stats["failure_rate"] = (captureStats.totalCaptures > 0) ? 
+                          (captureStats.failedCaptures * 100.0 / captureStats.totalCaptures) : 0;
+  stats["consecutive_failures"] = captureStats.consecutiveFailures;
+  stats["last_failure"] = captureStats.lastFailureTime;
+  stats["degraded_mode"] = captureStats.degradedMode;
+  
   // Current settings
   JsonObject settings = doc["settings"].to<JsonObject>();
   settings["framesize"] = cameraSettings.framesize;
@@ -421,6 +502,8 @@ esp_err_t status_handler(httpd_req_t *req) {
   settings["capture_interval"] = captureInterval / 1000;
   settings["capture_duration"] = captureDuration / 1000;
   settings["stream_interval"] = imageStreamInterval / 1000;
+  settings["target_fps"] = targetFPS;
+  settings["frame_delay_ms"] = frameDelayMs;
   
   // Resolution info
   sensor_t *s = esp_camera_sensor_get();
@@ -477,17 +560,59 @@ esp_err_t control_handler(httpd_req_t *req) {
   String var = doc["var"];
   int val = doc["val"];
   
+  Serial.printf("\n=== CAMERA SETTING CHANGE ===\n");
+  Serial.printf("Variable: %s, Value: %d\n", var.c_str(), val);
+  Serial.printf("Memory before - Heap: %d, PSRAM: %d\n", ESP.getFreeHeap(), ESP.getFreePsram());
+  
   sensor_t *s = esp_camera_sensor_get();
   int res = 0;
   
   if (var == "framesize") {
     if (s->pixformat == PIXFORMAT_JPEG) {
-      res = s->set_framesize(s, (framesize_t)val);
-      cameraSettings.framesize = val;
+      Serial.printf("Changing framesize from %d to %d\n", cameraSettings.framesize, val);
+      
+      // Test if we can get a frame before changing
+      camera_fb_t *test_fb = esp_camera_fb_get();
+      if (test_fb) {
+        Serial.printf("Pre-change test: Successfully captured frame (%d bytes)\n", test_fb->len);
+        esp_camera_fb_return(test_fb);
+      } else {
+        Serial.println("WARNING: Cannot capture frame BEFORE resolution change!");
+      }
+      
+            res = s->set_framesize(s, (framesize_t)val);
+       if (res == 0) {
+          cameraSettings.framesize = val;
+          Serial.println("Framesize change successful");
+          
+          // Test capture after change
+          delay(100);  // Give camera time to adjust
+          test_fb = esp_camera_fb_get();
+          if (test_fb) {
+            Serial.printf("Post-change test: Successfully captured frame at new resolution (%d bytes)\n", test_fb->len);
+            esp_camera_fb_return(test_fb);
+            
+            // Save settings to flash
+            saveSettings();
+          } else {
+            Serial.println("ERROR: Cannot capture frame AFTER resolution change!");
+            Serial.println("This resolution may not work with current buffer configuration!");
+            Serial.println("Consider restarting device to reinitialize camera with new settings.");
+            Serial.println("Settings NOT saved due to test failure.");
+          }
+        } else {
+          Serial.printf("ERROR: Framesize change failed with error: %d\n", res);
+        }
     }
   } else if (var == "quality") {
+    Serial.printf("Changing quality from %d to %d\n", cameraSettings.quality, val);
     res = s->set_quality(s, val);
     cameraSettings.quality = val;
+    if (res == 0) {
+      Serial.println("Quality change successful");
+    } else {
+      Serial.printf("ERROR: Quality change failed with error: %d\n", res);
+    }
   } else if (var == "brightness") {
     res = s->set_brightness(s, val);
     cameraSettings.brightness = val;
@@ -499,9 +624,33 @@ esp_err_t control_handler(httpd_req_t *req) {
     cameraSettings.saturation = val;
   }
   
+  Serial.printf("Memory after - Heap: %d, PSRAM: %d\n", ESP.getFreeHeap(), ESP.getFreePsram());
+  Serial.println("===========================\n");
+  
   JsonDocument response;
   response["success"] = (res == 0);
-  response["message"] = (res == 0) ? "Setting updated" : "Setting failed";
+  
+  // Add detailed feedback for framesize changes
+  if (var == "framesize") {
+    if (res == 0) {
+      // Test if camera can capture at new resolution
+      camera_fb_t *test_fb = esp_camera_fb_get();
+      if (test_fb) {
+        response["message"] = "Framesize updated and tested OK";
+        response["test_passed"] = true;
+        response["frame_size_bytes"] = test_fb->len;
+        esp_camera_fb_return(test_fb);
+      } else {
+        response["message"] = "Framesize changed but capture test FAILED! Device restart recommended.";
+        response["test_passed"] = false;
+        response["warning"] = "Camera may not work at this resolution without restart";
+      }
+    } else {
+      response["message"] = "Setting failed";
+    }
+  } else {
+    response["message"] = (res == 0) ? "Setting updated" : "Setting failed";
+  }
   
   String responseStr;
   serializeJson(response, responseStr);
@@ -667,6 +816,60 @@ esp_err_t command_handler(httpd_req_t *req) {
     } else {
       message = "SD write failed";
     }
+  } else if (command == "test_camera") {
+    // Test camera capture capability
+    Serial.println("\n=== CAMERA CAPTURE TEST ===");
+    sensor_t *s = esp_camera_sensor_get();
+    if (s) {
+      Serial.printf("Current settings: framesize=%d, quality=%d\n", 
+                    s->status.framesize, s->status.quality);
+      Serial.printf("Memory: Heap=%d, PSRAM=%d\n", ESP.getFreeHeap(), ESP.getFreePsram());
+      
+      // Try to capture 3 frames
+      int successes = 0;
+      int failures = 0;
+      unsigned long totalTime = 0;
+      
+      for (int i = 0; i < 3; i++) {
+        unsigned long start = millis();
+        camera_fb_t *fb = esp_camera_fb_get();
+        unsigned long elapsed = millis() - start;
+        
+        if (fb) {
+          successes++;
+          totalTime += elapsed;
+          Serial.printf("  Test %d: ✓ SUCCESS - %d bytes, %dx%d, took %lu ms\n", 
+                        i+1, fb->len, fb->width, fb->height, elapsed);
+          esp_camera_fb_return(fb);
+        } else {
+          failures++;
+          Serial.printf("  Test %d: ✗ FAILED after %lu ms\n", i+1, elapsed);
+        }
+        delay(100);
+      }
+      
+      Serial.printf("Results: %d/%d successful", successes, successes + failures);
+      if (successes > 0) {
+        Serial.printf(" (avg %lu ms per frame, ~%.1f FPS possible)\n", 
+                      totalTime/successes, 1000.0/(totalTime/successes));
+      } else {
+        Serial.println();
+      }
+      Serial.println("===========================\n");
+      
+      if (successes == 3) {
+        success = true;
+        message = String("Camera test PASSED (") + (1000/(totalTime/successes)) + " FPS capable)";
+      } else if (successes > 0) {
+        success = true;
+        message = String("Camera test PARTIAL (") + successes + "/3 frames captured)";
+      } else {
+        success = false;
+        message = "Camera test FAILED - cannot capture frames! Try restarting device.";
+      }
+    } else {
+      message = "Failed to get camera sensor";
+    }
   } else if (command == "clear_sd") {
     // Delete all video files from SD card
     Serial.println("=== CLEARING SD CARD ===");
@@ -756,11 +959,36 @@ esp_err_t recording_config_handler(httpd_req_t *req) {
   } else if (setting == "stream_interval") {
     imageStreamInterval = value * 1000; // Convert to milliseconds
     success = true;
+  } else if (setting == "fps") {
+    // Set target FPS (0 = unlimited)
+    targetFPS = value;
+    if (value == 0) {
+      frameDelayMs = 0;  // No delay = max FPS
+    } else if (value > 0 && value <= 60) {
+      frameDelayMs = 1000 / value;  // Calculate delay for target FPS
+    } else {
+      success = false;
+    }
+    if (value >= 0 && value <= 60) {
+      success = true;
+      Serial.printf("FPS set to %d (frame delay: %lu ms)\n", value, frameDelayMs);
+    }
+  } else if (setting == "frame_delay") {
+    // Direct frame delay control in milliseconds
+    frameDelayMs = value;
+    targetFPS = (value > 0) ? (1000 / value) : 0;
+    success = true;
+    Serial.printf("Frame delay set to %lu ms (approx %lu FPS)\n", frameDelayMs, targetFPS);
+  }
+  
+  // Save settings to flash if successful
+  if (success) {
+    saveSettings();
   }
   
   JsonDocument response;
   response["success"] = success;
-  response["message"] = success ? "Recording setting updated" : "Invalid setting";
+  response["message"] = success ? "Recording setting updated (saved to flash)" : "Invalid setting";
   
   String responseStr;
   serializeJson(response, responseStr);
@@ -847,8 +1075,31 @@ esp_err_t apply_settings_handler(httpd_req_t *req) {
     imageStreamInterval = doc["stream_interval"].as<int>() * 1000;
   }
   
+  // FPS control
+  if (doc["fps"].is<int>()) {
+    int fps = doc["fps"];
+    targetFPS = fps;
+    if (fps == 0) {
+      frameDelayMs = 0;
+    } else if (fps > 0 && fps <= 60) {
+      frameDelayMs = 1000 / fps;
+    }
+    Serial.printf("FPS set to %d (frame delay: %lu ms)\n", fps, frameDelayMs);
+  }
+  
+  if (doc["frame_delay"].is<int>()) {
+    frameDelayMs = doc["frame_delay"];
+    targetFPS = (frameDelayMs > 0) ? (1000 / frameDelayMs) : 0;
+    Serial.printf("Frame delay set to %lu ms (approx %lu FPS)\n", frameDelayMs, targetFPS);
+  }
+  
   if (!success) {
     message = "Some settings failed to apply";
+  } else {
+    // Save all settings to flash if successful
+    Serial.println("All settings applied successfully - saving to flash");
+    saveSettings();
+    message += " (saved to flash)";
   }
   
   JsonDocument response;
@@ -965,6 +1216,20 @@ void setup() {
   Serial.printf("Compile Time: %s %s\n", __DATE__, __TIME__);
   Serial.printf("Free Heap: %d bytes\n", ESP.getFreeHeap());
   Serial.printf("Free PSRAM: %d bytes\n", ESP.getFreePsram());
+  
+  // === STAGE 0: LOAD SAVED SETTINGS ===
+  Serial.println("STAGE 0: Loading saved settings from flash...");
+  loadSettings();
+  
+  // Auto-configure FPS for UXGA if not set
+  if (cameraSettings.framesize >= FRAMESIZE_UXGA && targetFPS == 0) {
+    targetFPS = 8;  // Auto-limit to 8 FPS for UXGA
+    frameDelayMs = 1000 / targetFPS;
+    Serial.println("⚠️  UXGA detected with unlimited FPS - auto-limiting to 8 FPS for stability");
+  }
+  
+  Serial.printf("Will initialize camera with: framesize=%d, quality=%d, fps=%lu\n",
+                cameraSettings.framesize, cameraSettings.quality, targetFPS);
   
   // === STAGE 1: BASIC INITIALIZATION (Low Power) ===
   Serial.println("STAGE 1: Basic system initialization...");
@@ -1170,13 +1435,69 @@ void setup() {
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
   
-  // Auto-configure based on PSRAM availability
+  // Auto-configure based on PSRAM availability and resolution
   if (hasPSRAM) {
-    Serial.println("PSRAM available - using QVGA resolution");
-    config.frame_size = (framesize_t)cameraSettings.framesize;  // QVGA or higher
     config.fb_location = CAMERA_FB_IN_PSRAM;
-    config.jpeg_quality = cameraSettings.quality;
-    config.fb_count = 1;
+    config.frame_size = (framesize_t)cameraSettings.framesize;
+    
+    // Adaptive settings for high resolution - Multi-tier system
+    if (cameraSettings.framesize >= FRAMESIZE_UXGA) {
+      // UXGA (1600x1200) - MAXIMUM resolution - Special handling
+      Serial.println("========================================");
+      Serial.println("UXGA (1600x1200) MAXIMUM RESOLUTION MODE");
+      Serial.println("========================================");
+      config.fb_count = HIGH_RES_FB_COUNT;
+      
+      // Force aggressive quality settings for UXGA
+      if (cameraSettings.quality < 35) {
+        Serial.printf("WARNING: Quality %d too high for UXGA, forcing to 35\n", cameraSettings.quality);
+        config.jpeg_quality = 35;
+      } else {
+        config.jpeg_quality = cameraSettings.quality;
+      }
+      
+      Serial.printf("Configuration: %d frame buffers, quality %d\n", 
+                    config.fb_count, config.jpeg_quality);
+      Serial.printf("Expected frame size: ~%d KB (depends on scene complexity)\n", 
+                    config.jpeg_quality <= 35 ? 150 : 
+                    config.jpeg_quality <= 40 ? 120 : 100);
+      Serial.println("Recommendations for UXGA:");
+      Serial.println("  - Use FPS 5-10 maximum");
+      Serial.println("  - Quality 35-40 for stability");
+      Serial.println("  - Adequate power supply (5V 2A minimum)");
+      Serial.println("  - Monitor capture failure rate");
+      Serial.println("========================================");
+      
+    } else if (cameraSettings.framesize >= VERY_HIGH_RES_THRESHOLD) {
+      // SXGA (1280x1024) - Very high resolution
+      Serial.printf("VERY HIGH resolution mode: SXGA (using %d frame buffers, quality %d)\n", 
+                    HIGH_RES_FB_COUNT, VERY_HIGH_RES_QUALITY);
+      config.fb_count = HIGH_RES_FB_COUNT;
+      config.jpeg_quality = max(cameraSettings.quality, VERY_HIGH_RES_QUALITY);
+      
+      Serial.printf("Expected frame size: ~%d KB\n", 
+                    config.jpeg_quality <= 30 ? 200 : 150);
+      Serial.println("Recommended FPS: 8-12 for stability");
+      
+    } else if (cameraSettings.framesize >= HIGH_RES_THRESHOLD) {
+      // High resolution (800x600 to 1024x768)
+      Serial.printf("High resolution mode: %d (using %d frame buffers, quality %d)\n", 
+                    cameraSettings.framesize, HIGH_RES_FB_COUNT, HIGH_RES_QUALITY);
+      config.fb_count = HIGH_RES_FB_COUNT;
+      config.jpeg_quality = max(cameraSettings.quality, HIGH_RES_QUALITY);
+      
+      // For XGA (1024x768), use quality 30
+      if (cameraSettings.framesize >= FRAMESIZE_XGA) {
+        config.jpeg_quality = max(config.jpeg_quality, 30);
+        Serial.printf("XGA resolution - quality adjusted to %d\n", config.jpeg_quality);
+      }
+    } else {
+      // Normal resolution (VGA and below)
+      Serial.printf("Normal resolution mode: %d (using %d frame buffer, quality %d)\n",
+                    cameraSettings.framesize, NORMAL_FB_COUNT, cameraSettings.quality);
+      config.fb_count = NORMAL_FB_COUNT;
+      config.jpeg_quality = cameraSettings.quality;
+    }
   } else {
     Serial.println("No PSRAM - using QQVGA with DRAM");
     config.frame_size = FRAMESIZE_QQVGA;  // 160x120 (small but works)
@@ -1188,6 +1509,72 @@ void setup() {
   }
   
   config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+
+  // Check if we have enough PSRAM for the requested configuration
+  if (hasPSRAM && cameraSettings.framesize >= HIGH_RES_THRESHOLD) {
+    size_t estimatedFrameSize = 0;
+    
+    // Enhanced estimation accounting for quality settings
+    switch(cameraSettings.framesize) {
+      case FRAMESIZE_SVGA: 
+        estimatedFrameSize = 80000; 
+        break;   // ~80 KB
+      case FRAMESIZE_XGA:  
+        estimatedFrameSize = 120000; 
+        break;  // ~120 KB
+      case FRAMESIZE_HD:   
+        estimatedFrameSize = 100000; 
+        break;  // ~100 KB (widescreen, less pixels than XGA)
+      case FRAMESIZE_SXGA: 
+        estimatedFrameSize = config.jpeg_quality <= 30 ? 200000 : 150000;
+        break;  // ~150-200 KB depending on quality
+      case FRAMESIZE_UXGA: 
+        // UXGA estimation based on quality
+        if (config.jpeg_quality <= 35) {
+          estimatedFrameSize = 150000;  // ~150 KB with quality 35
+        } else if (config.jpeg_quality <= 40) {
+          estimatedFrameSize = 120000;  // ~120 KB with quality 40
+        } else {
+          estimatedFrameSize = 100000;  // ~100 KB with quality 45+
+        }
+        Serial.printf("UXGA frame size estimate: %d KB (quality %d)\n", 
+                      estimatedFrameSize/1024, config.jpeg_quality);
+        break;
+      default: 
+        estimatedFrameSize = 50000; 
+        break;
+    }
+    
+    // Different safety margins for different resolutions
+    float safetyMultiplier = (cameraSettings.framesize >= FRAMESIZE_UXGA) ? 2.5 : 2.0;
+    size_t requiredPSRAM = (size_t)(estimatedFrameSize * config.fb_count * safetyMultiplier);
+    
+    Serial.printf("Estimated PSRAM required: %d KB (have: %d KB)\n", 
+                  requiredPSRAM/1024, psramSize/1024);
+    Serial.printf("  Per-frame estimate: %d KB × %d buffers × %.1fx safety = %d KB\n",
+                  estimatedFrameSize/1024, config.fb_count, safetyMultiplier, requiredPSRAM/1024);
+    
+    if (psramSize < requiredPSRAM) {
+      Serial.println("****************************************");
+      Serial.println("⚠️  WARNING: Insufficient PSRAM for resolution!");
+      Serial.printf("Need: %d KB, Have: %d KB (Deficit: %d KB)\n", 
+                    requiredPSRAM/1024, psramSize/1024, (requiredPSRAM-psramSize)/1024);
+      Serial.println("Consider:");
+      Serial.println("  1. Using lower resolution");
+      if (cameraSettings.framesize >= FRAMESIZE_UXGA) {
+        Serial.println("  2. For UXGA: Quality MUST be 35-40");
+        Serial.println("  3. For UXGA: FPS should be 5-10 maximum");
+        Serial.println("  4. Try SXGA or HD instead");
+      } else {
+        Serial.println("  2. Increasing JPEG quality number (35-40)");
+        Serial.println("  3. Limiting FPS to 5-10");
+      }
+      Serial.println("****************************************");
+    } else {
+      Serial.printf("✓ PSRAM sufficient (%.1f KB available for other uses)\n", 
+                    (psramSize - requiredPSRAM) / 1024.0);
+    }
+  }
 
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
@@ -1377,6 +1764,36 @@ void loop() {
       
       String filename = getTimestampFilename();
       Serial.printf("DEBUG: Opening file for writing: %s\n", filename.c_str());
+      
+      // Get current camera settings before recording
+      sensor_t *s = esp_camera_sensor_get();
+      if (s) {
+        Serial.printf("\n=== CAMERA STATUS BEFORE RECORDING ===\n");
+        Serial.printf("Current framesize: %d\n", s->status.framesize);
+        Serial.printf("Current quality: %d\n", s->status.quality);
+        Serial.printf("Configured framesize: %d\n", cameraSettings.framesize);
+        Serial.printf("Configured quality: %d\n", cameraSettings.quality);
+        Serial.printf("Memory: Heap=%d, PSRAM=%d\n", ESP.getFreeHeap(), ESP.getFreePsram());
+        
+        // Do a test capture before starting recording
+        Serial.println("Performing pre-recording test capture...");
+        camera_fb_t *test_fb = esp_camera_fb_get();
+        if (test_fb) {
+          Serial.printf("✓ Test capture successful: %d bytes, %dx%d\n", 
+                        test_fb->len, test_fb->width, test_fb->height);
+          esp_camera_fb_return(test_fb);
+        } else {
+          Serial.println("✗ Test capture FAILED!");
+          Serial.println("Recording will likely fail. Check:");
+          Serial.println("  1. Resolution too high for buffer configuration");
+          Serial.println("  2. Camera needs restart after settings change");
+          Serial.println("  3. Power supply insufficient");
+          Serial.println("Aborting recording to prevent wasted SD writes.\n");
+          return;
+        }
+        Serial.println("=====================================\n");
+      }
+      
       videoFile = SD.open(filename, FILE_WRITE);
       if (!videoFile) {
         Serial.printf("ERROR: Failed to open video file: %s\n", filename.c_str());
@@ -1387,14 +1804,54 @@ void loop() {
       
       // Start capturing video frames
       int frame_count = 0;
+      int failed_frames = 0;
       size_t totalBytesWritten = 0;
       unsigned long recordingStartTime = millis();
+      unsigned long lastFrameTime = millis();
+      
       while ((millis() - lastCaptureTime) < captureDuration) {
-        camera_fb_t *fb = esp_camera_fb_get();
-        if (!fb) {
-          Serial.println("ERROR: Failed to get framebuffer!");
-          break;
+        // FPS control: delay between frames if configured
+        if (frameDelayMs > 0) {
+          unsigned long timeSinceLastFrame = millis() - lastFrameTime;
+          if (timeSinceLastFrame < frameDelayMs) {
+            delay(frameDelayMs - timeSinceLastFrame);
+          }
         }
+        lastFrameTime = millis();
+        
+        camera_fb_t *fb = esp_camera_fb_get();
+        captureStats.totalCaptures++;
+        
+        if (!fb) {
+          // Track capture failure
+          captureStats.failedCaptures++;
+          captureStats.consecutiveFailures++;
+          captureStats.lastFailureTime = millis();
+          failed_frames++;
+          
+          Serial.printf("ERROR: Failed to get framebuffer! (consecutive: %d, total: %lu/%lu)\n", 
+                        captureStats.consecutiveFailures, 
+                        captureStats.failedCaptures, 
+                        captureStats.totalCaptures);
+          Serial.printf("DEBUG: Free Heap: %d, Free PSRAM: %d\n", ESP.getFreeHeap(), ESP.getFreePsram());
+          
+          // If too many consecutive failures, abort recording
+          if (captureStats.consecutiveFailures >= 10) {
+            Serial.println("CRITICAL: Too many consecutive capture failures - aborting recording!");
+            Serial.println("This likely means:");
+            Serial.println("  1. Resolution too high for available memory");
+            Serial.println("  2. PSRAM fragmentation");
+            Serial.println("  3. Insufficient power supply");
+            Serial.println("Consider lowering resolution or JPEG quality.");
+            break;
+          }
+          
+          delay(10);  // Brief delay before retry
+          continue;
+        }
+        
+        // Successful capture - reset consecutive failure counter
+        captureStats.consecutiveFailures = 0;
         
         size_t bytesWritten = videoFile.write(fb->buf, fb->len);
         if (bytesWritten != fb->len) {
@@ -1411,12 +1868,24 @@ void loop() {
           delay(1);  // Yields CPU to other tasks including HTTP server
         }
         
-        // Progress indicator every 50 frames
+        // Progress indicator every 50 frames with detailed stats
         if (frame_count % 50 == 0) {
-          Serial.printf("Recording progress: %d frames, %lu ms elapsed, %d bytes written\n", 
-                        frame_count, millis() - recordingStartTime, totalBytesWritten);
+          float failRate = (failed_frames > 0) ? (failed_frames * 100.0 / (frame_count + failed_frames)) : 0;
+          Serial.printf("Recording progress: %d frames (%d failed, %.1f%% fail rate), %lu ms elapsed, %d bytes written\n", 
+                        frame_count, failed_frames, failRate, millis() - recordingStartTime, totalBytesWritten);
+          Serial.printf("  Memory: Heap=%d, PSRAM=%d\n", ESP.getFreeHeap(), ESP.getFreePsram());
         }
       }
+      
+      // Report capture statistics
+      float totalFailRate = (captureStats.totalCaptures > 0) ? 
+                            (captureStats.failedCaptures * 100.0 / captureStats.totalCaptures) : 0;
+      Serial.printf("\n=== CAPTURE STATISTICS ===\n");
+      Serial.printf("This recording: %d successful, %d failed\n", frame_count, failed_frames);
+      Serial.printf("Session total: %lu successful, %lu failed (%.2f%% failure rate)\n",
+                    captureStats.totalCaptures - captureStats.failedCaptures,
+                    captureStats.failedCaptures, totalFailRate);
+      Serial.println("=========================\n");
       
       // Flush and close the video file
       Serial.println("DEBUG: Flushing file buffer...");

@@ -151,6 +151,8 @@ class CameraSettings(BaseModel):
     capture_interval: Optional[int] = None
     capture_duration: Optional[int] = None
     stream_interval: Optional[int] = None
+    fps: Optional[int] = None
+    frame_delay: Optional[int] = None
 
 # Device discovery and management
 def discover_edge_devices(force=False):
