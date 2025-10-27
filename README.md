@@ -736,6 +736,232 @@ Common upload errors and solutions:
                                    └─────────────────┘
 ```
 
+### 🔗 How Components Communicate
+
+#### **Communication Flow Diagram**
+
+```
+┌──────────────┐         ┌──────────────┐         ┌──────────────┐
+│    User      │         │   Web Server │         │  ESP32 Edge  │
+│   Browser    │         │   (Python)   │         │   Device     │
+└──────┬───────┘         └──────┬───────┘         └──────┬───────┘
+       │                        │                        │
+       │  1. GET /camera-control│                        │
+       │─────────────────────────►                        │
+       │                        │                        │
+       │  2. Configure device IP                          │
+       │   POST /api/device/configure                      │
+       │   {"ip": "192.168.1.52"}                          │
+       │─────────────────────────►                        │
+       │                        │                        │
+       │                        │  3. Save to config   │
+       │                        │     device_config.json│
+       │                        │                        │
+       │  4. Motor Control      │                        │
+       │   POST /api/motor/control                        │
+       │   {"speed": 75}        │                        │
+       │─────────────────────────►                        │
+       │                        │  5. Forward to ESP32 │
+       │                        │   POST http://192.168│
+       │                        │      .1.52:80/motor  │
+       │                        │──────────────────────►│
+       │                        │                        │
+       │                        │                        │  6. Control Motor
+       │                        │                        │     motor.setSpeed(75)
+       │                        │                        │
+       │                        │  7. Response: {"success": true}
+       │                        │◄───────────────────────│
+       │  8. Success notification                           │
+       │◄─────────────────────────                           │
+```
+
+### 📍 How Each Component Finds Others
+
+#### **1. Browser → Web Server Communication**
+
+**Browser Side:**
+- User opens: `http://WEB_SERVER_IP:8000`
+- Web server IP is either:
+  - **Local**: `http://localhost:8000` (when running locally)
+  - **Remote**: `http://192.168.1.100:8000` (server on network)
+
+**How Browser Knows:**
+- User enters the IP address directly
+- Or uses localhost for local development
+- No auto-discovery needed
+
+---
+
+#### **2. Web Server → ESP32 Communication** 
+
+**Discovery Methods (in priority order):**
+
+**Method 1: Saved Configuration** (Most Reliable)
+```json
+// File: web/app/device_config.json
+{
+  "ip": "10.131.215.187",
+  "port": 80
+}
+```
+- User manually configures via web interface
+- Saved to disk and persists across restarts
+- Web server reads this file to know ESP32 IP
+
+**Method 2: mDNS Auto-Discovery**
+- ESP32 broadcasts: `edge-monitor.local`
+- Web server scans network: `avahi-browse _http._tcp`
+- Automatically finds device
+
+**Method 3: Network Scanning**
+- Scans common IP ranges: `192.168.1.x`
+- Tests ports: 80, 8080, 81
+- Slowest method, used as fallback
+
+**Request Forwarding:**
+```python
+# web/app/main.py
+def make_device_request(endpoint, method="GET", data=None):
+    device_url = get_primary_device()  # Gets IP from config
+    url = f"{device_url}{endpoint}"    # e.g., "http://10.131.215.187:80/motor"
+    response = requests.post(url, json=data)
+    return response.json()
+```
+
+---
+
+#### **3. ESP32 → Web Server Communication**
+
+**ESP32 Side (Hardcoded):**
+```cpp
+// edge_monitor/edge_monitor.ino
+const char* IP = "192.168.1.57";        // Web server IP
+const int SERVER_PORT = 8000;            // Web server port
+String UPLOAD_URL = "http://" + String(IP) + ":8000/upload";
+```
+
+**How ESP32 Finds Web Server:**
+- **Uploads videos**: Sends to `http://192.168.1.57:8000/api/upload-image`
+- **Hardcoded IP** in firmware (line 40)
+- **Must match** the IP where web server is running
+
+**Update ESP32 to point to correct server:**
+1. Find web server IP: `ip addr` or `ipconfig`
+2. Edit `edge_monitor.ino` line 40:
+   ```cpp
+   const char* IP = "YOUR_WEB_SERVER_IP";  // Change this!
+   ```
+3. Re-upload firmware
+
+---
+
+### 🔄 Complete Communication Map
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    Network Communication Map                 │
+└──────────────────────────────────────────────────────────────┘
+
+BROWSER (Knows nothing initially, you type in web server URL)
+    │
+    │ 1. User types: http://192.168.1.100:8000
+    ▼
+WEB SERVER (Knows ESP32 IP from device_config.json)
+    │
+    │ 2. Reads: {"ip": "10.131.215.187", "port": 80}
+    │
+    │ 3. Forward requests to: http://10.131.215.187:80/...
+    ▼
+ESP32 DEVICE (Hardcoded web server IP: 192.168.1.57)
+    │
+    │ 4. Uploads to: http://192.168.1.57:8000/api/upload-image
+    ▼
+WEB SERVER (Receives uploads)
+
+CRITICAL: ESP32's hardcoded IP (192.168.1.57) must match 
+          web server's actual IP for uploads to work!
+```
+
+---
+
+### ⚙️ Configuration Files
+
+#### **Web Server Configuration**
+File: `web/app/device_config.json`
+```json
+{
+  "ip": "10.131.215.187",  // ESP32's IP address
+  "port": 80                 // ESP32's HTTP port
+}
+```
+**Purpose:** Tells web server where to send control commands
+
+#### **ESP32 Configuration**
+File: `edge_monitor/edge_monitor.ino`
+```cpp
+const char* WIFI_SSID = "Firefly";
+const char* WIFI_PASSWORD = "wawadudu";
+
+const char* IP = "192.168.1.57";  // Web server's IP address
+const int SERVER_PORT = 8000;
+```
+**Purpose:** Tells ESP32 where to upload videos/images
+
+---
+
+### 🎯 Setup Checklist
+
+#### **Step 1: Find Network IPs**
+```bash
+# Find web server IP
+hostname -I
+# or
+ip addr show
+
+# Find ESP32 IP (check Serial Monitor during boot)
+# Look for: "WiFi connected! IP: 192.168.1.52"
+```
+
+#### **Step 2: Configure ESP32**
+Edit `edge_monitor/edge_monitor.ino`:
+```cpp
+const char* WIFI_SSID = "YourNetwork";
+const char* IP = "WEB_SERVER_IP";  // Update this!
+```
+
+#### **Step 3: Start Web Server**
+```bash
+cd web
+python app/main.py
+# Server starts on http://localhost:8000
+```
+
+#### **Step 4: Configure Device in Web Interface**
+1. Open: `http://localhost:8000` (or `http://WEB_SERVER_IP:8000`)
+2. Enter ESP32 IP address in configuration form
+3. Click "Connect & Save Device"
+4. Now you can control ESP32 from web interface!
+
+---
+
+### 🚨 Common Issues
+
+**Problem: "No device configured"**
+- Solution: Configure ESP32 IP via web interface
+
+**Problem: Uploads not working**
+- Check: ESP32's hardcoded IP matches web server IP
+- Update line 40 in `edge_monitor.ino`
+
+**Problem: Control commands not working**
+- Check: `device_config.json` has correct ESP32 IP
+- Check: ESP32 and web server on same network
+
+**Problem: Can't find ESP32**
+- Try: Manual IP entry in web interface
+- Check: ESP32 Serial Monitor for actual IP
+- Verify: Same WiFi network
+
 ## 🎛️ Complete Camera Settings Reference
 
 ### Frame Sizes (All Available)

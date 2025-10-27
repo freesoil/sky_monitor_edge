@@ -27,17 +27,18 @@
 #include "camera_pins.h"
 #include "CircularBuffer.h"
 #include "VideoUploader.h"
+#include "Motor.h"
 
 const int SD_PIN_CS = 21;
 const int LED_PIN = LED_BUILTIN; // Built-in LED on XIAO ESP32S3
 
 // WiFi Configuration
-const char* WIFI_SSID = "wwddOhYeah!";        
+const char* WIFI_SSID = "Firefly";        
 const char* WIFI_PASSWORD = "wawadudu"; 
 
 // Server Configuration - ONLY PLACE TO CHANGE IP
 // const char* IP = "10.190.61.153";
-const char* IP = "192.168.1.57";
+const char* IP = "10.131.215.153";
 
 const int SERVER_PORT = 8000;
 const int HTTP_PORT = 80;
@@ -73,6 +74,9 @@ bool streamingEnabled = true;
 CircularBuffer* circularBuffer;
 VideoUploader* videoUploader;
 httpd_handle_t camera_httpd = NULL;
+
+// Motor instance (Single motor on D4=GPIO4, D5=GPIO5, LEDC channels 0,1)
+Motor motor(4, 5, 0, 1, 10, 100);  // deadZone=10, maxSpeed=100
 
 File videoFile;
 bool camera_sign = false;
@@ -139,6 +143,7 @@ esp_err_t command_handler(httpd_req_t *req);
 esp_err_t recording_config_handler(httpd_req_t *req);
 esp_err_t apply_settings_handler(httpd_req_t *req);
 esp_err_t files_handler(httpd_req_t *req);
+esp_err_t motor_control_handler(httpd_req_t *req);
 
 // Settings persistence functions
 void saveSettings() {
@@ -426,6 +431,14 @@ void startCameraServer() {
     .user_ctx  = NULL
   };
   
+  // Motor control endpoint
+  httpd_uri_t motor_uri = {
+    .uri       = "/motor",
+    .method    = HTTP_POST,
+    .handler   = motor_control_handler,
+    .user_ctx  = NULL
+  };
+  
   // Add root endpoint for basic device detection
   httpd_uri_t root_uri = {
     .uri       = "/",
@@ -442,6 +455,7 @@ void startCameraServer() {
     httpd_register_uri_handler(camera_httpd, &recording_config_uri);
     httpd_register_uri_handler(camera_httpd, &apply_settings_uri);
     httpd_register_uri_handler(camera_httpd, &files_uri);
+    httpd_register_uri_handler(camera_httpd, &motor_uri);
     httpd_register_uri_handler(camera_httpd, &root_uri);
     
     Serial.printf("Camera HTTP server started on port %d\n", HTTP_PORT);
@@ -1151,6 +1165,49 @@ esp_err_t files_handler(httpd_req_t *req) {
   return ESP_OK;
 }
 
+esp_err_t motor_control_handler(httpd_req_t *req) {
+  char buf[100];
+  int ret = httpd_req_recv(req, buf, sizeof(buf));
+  if (ret <= 0) {
+    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid request");
+    return ESP_FAIL;
+  }
+  buf[ret] = '\0';
+  
+  JsonDocument doc;
+  deserializeJson(doc, buf);
+  
+  // Check if speed key exists and is valid
+  if (!doc["speed"].is<int>()) {
+    httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing 'speed' parameter");
+    return ESP_FAIL;
+  }
+  
+  int speed = doc["speed"];
+  
+  // Clamp speed to -100 to 100 range
+  speed = constrain(speed, -100, 100);
+  
+  // Apply to motor (dead zone is handled in Motor class)
+  motor.setSpeed(speed);
+  
+  Serial.printf("Motor speed set to: %d\n", speed);
+  
+  JsonDocument response;
+  response["success"] = true;
+  response["speed"] = speed;
+  response["message"] = "Motor speed updated";
+  
+  String responseStr;
+  serializeJson(response, responseStr);
+  
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+  httpd_resp_send(req, responseStr.c_str(), responseStr.length());
+  
+  return ESP_OK;
+}
+
 void streamImageToServer() {
   if (!wifi_connected || !streamingEnabled) {
     return;
@@ -1244,6 +1301,11 @@ void setup() {
   delay(2000);
   digitalWrite(LED_PIN, LOW);
   delay(500);
+  
+  // Initialize motor
+  Serial.println("DEBUG: Initializing motor...");
+  motor.init();
+  Serial.println("DEBUG: Motor initialized successfully");
   
   // Initialize basic class instances (no hardware access yet)
   Serial.println("DEBUG: Initializing class instances...");

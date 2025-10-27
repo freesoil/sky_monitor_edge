@@ -10,11 +10,10 @@ void Motor::init() {
   pinMode(pin1, OUTPUT);
   pinMode(pin2, OUTPUT);
   
-  ledcAttachPin(pin1, channel1);
-  ledcAttachPin(pin2, channel2);
-  
-  ledcSetup(channel1, 4000, 8);  // 4kHz, 8-bit resolution
-  ledcSetup(channel2, 4000, 8);
+  // ESP32 3.0.x LEDC API: ledcAttach(pin, frequency, resolution)
+  // Channel is automatically assigned
+  ledcAttach(pin1, 4000, 8);  // 4kHz, 8-bit resolution
+  ledcAttach(pin2, 4000, 8);  // 4kHz, 8-bit resolution
   
   stop();  // Initialize to stop
 }
@@ -35,19 +34,19 @@ void Motor::setSpeed(int speed) {
   
   if (speed > 0) {
     // Forward: pin1 LOW, pin2 PWM
-    ledcWrite(channel1, 0);
-    ledcWrite(channel2, pwmSpeed);
+    ledcWrite(pin1, 0);
+    ledcWrite(pin2, pwmSpeed);
   } else {
     // Reverse: pin1 PWM, pin2 LOW
-    ledcWrite(channel1, pwmSpeed);
-    ledcWrite(channel2, 0);
+    ledcWrite(pin1, pwmSpeed);
+    ledcWrite(pin2, 0);
   }
 }
 
 // Stop motor
 void Motor::stop() {
-  ledcWrite(channel1, 0);
-  ledcWrite(channel2, 0);
+  ledcWrite(pin1, 0);
+  ledcWrite(pin2, 0);
 }
 
 // Get motor info for debugging
@@ -55,4 +54,3 @@ void Motor::printInfo(const char* name) {
   Serial.printf("%s Motor: pin1=%d, pin2=%d, ch1=%d, ch2=%d\n", 
                 name, pin1, pin2, channel1, channel2);
 }
-

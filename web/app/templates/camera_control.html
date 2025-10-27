@@ -500,6 +500,25 @@
                     </div>
                 </div>
                 
+                <!-- Motor Control -->
+                <div class="control-panel">
+                    <h3>⚙️ Motor Control</h3>
+                    
+                    <div class="control-group">
+                        <label for="motor-speed">Motor Speed: <span class="range-value" id="motor-speed-value">0</span></label>
+                        <input type="range" id="motor-speed" min="-100" max="100" value="0" oninput="updateMotorSpeed(this.value)">
+                        <small style="color: #666; font-size: 11px; display: block; margin-top: 4px;">
+                            Dead zone: -10 to 10 (motor stops)
+                        </small>
+                    </div>
+                    
+                    <div class="button-group">
+                        <button class="btn btn-primary" onclick="setMotorSpeed(0)">⏹ Stop</button>
+                        <button class="btn btn-info" onclick="setMotorSpeed(50)">Half Forward</button>
+                        <button class="btn btn-info" onclick="setMotorSpeed(-50)">Half Reverse</button>
+                    </div>
+                </div>
+                
                 <!-- System Controls -->
                 <div class="control-panel">
                     <h3>🔧 System Controls</h3>
@@ -878,6 +897,57 @@
             .catch(error => {
                 logMessage(`Apply settings error: ${error.message}`);
                 showNotification('Apply settings failed', 'error');
+            });
+        }
+        
+        function updateMotorSpeed(speed) {
+            // Update the slider value and display
+            const slider = document.getElementById('motor-speed');
+            const valueSpan = document.getElementById('motor-speed-value');
+            
+            if (slider && valueSpan) {
+                slider.value = speed;
+                valueSpan.textContent = speed;
+            }
+            
+            sendMotorSpeed(speed);
+        }
+        
+        function setMotorSpeed(speed) {
+            updateMotorSpeed(speed);
+        }
+        
+        function sendMotorSpeed(speed) {
+            if (!deviceIP) {
+                showNotification('Device not connected', 'error');
+                return;
+            }
+            
+            // Map from -100 to 100 range to motor's actual range
+            // Motor's maxSpeed is 100, so we can directly use the value
+            // But let's map it properly: web sends -100 to 100, motor uses -100 to 100
+            const motorSpeed = speed;
+            
+            fetch('/api/motor/control', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ speed: motorSpeed })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    logMessage(`Motor speed set to: ${speed}`);
+                    showNotification(`Motor speed: ${speed}`, 'success');
+                } else {
+                    logMessage(`Failed to set motor speed: ${data.error}`);
+                    showNotification('Motor control failed', 'error');
+                }
+            })
+            .catch(error => {
+                logMessage(`Motor control error: ${error.message}`);
+                showNotification('Motor control failed', 'error');
             });
         }
         

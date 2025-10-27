@@ -720,6 +720,32 @@ async def send_camera_command(command: Command):
             "error": str(e)
         }
 
+@app.post("/api/motor/control")
+async def control_motor(request: Request):
+    """Control motor speed"""
+    try:
+        data = await request.json()
+        speed = data.get("speed", 0)
+        
+        # Clamp speed to -100 to 100 range
+        speed = max(-100, min(100, int(speed)))
+        
+        result = make_device_request("/motor", "POST", {
+            "speed": speed
+        })
+        
+        return {
+            "success": True,
+            "speed": speed,
+            "result": result
+        }
+    except Exception as e:
+        logger.error(f"Motor control error: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
 @app.post("/api/camera/apply-settings")
 async def apply_all_settings(settings: CameraSettings):
     """Apply multiple settings at once"""
