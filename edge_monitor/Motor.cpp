@@ -1,56 +1,51 @@
-#include "Motor.h"
 #include <Arduino.h>
+#include "Motor.h"
 
-// Constructor
-Motor::Motor(int p1, int p2, int ch1, int ch2, int dead, int max) 
-  : pin1(p1), pin2(p2), channel1(ch1), channel2(ch2), deadZone(dead), maxSpeed(max) {}
+static const uint32_t FREQ = 20000; // 20 kHz
+static const uint8_t  RES  = 8;     // 0..255
 
-// Initialize motor pins and LEDC channels
+// Constructor: pins + deadzone + maxSpeed
+Motor::Motor(int p1, int p2, int dead, int max)
+  : pin1(p1), pin2(p2), deadZone(dead), maxSpeed(max) {}
+
 void Motor::init() {
-  pinMode(pin1, OUTPUT);
-  pinMode(pin2, OUTPUT);
-  
-  // ESP32 3.0.x LEDC API: ledcAttach(pin, frequency, resolution)
-  // Channel is automatically assigned
-  ledcAttach(pin1, 4000, 8);  // 4kHz, 8-bit resolution
-  ledcAttach(pin2, 4000, 8);  // 4kHz, 8-bit resolution
-  
-  stop();  // Initialize to stop
+  // Attach PWM to both pins (auto channel selection)
+  bool ok1 = ledcAttach(pin1, FREQ, RES);
+  bool ok2 = ledcAttach(pin2, FREQ, RES);
+
+  if (!ok1 || !ok2) {
+    Serial.println("ERROR: ledcAttach failed on one or both pins");
+  } else {
+    Serial.printf("****** ledcAttach successful on pin1=%d, pin2=%d ******\n", pin1, pin2);
+  }
+  stop();
 }
 
-// Control motor with speed (-255 to 255, negative = reverse)
 void Motor::setSpeed(int speed) {
-  // Apply dead zone
-  if (abs(speed) < deadZone) {
-    stop();
-    return;
-  }
-  
-  // Clamp speed to max range
+  if (abs(speed) < deadZone) { stop(); return; }
+
   speed = constrain(speed, -maxSpeed, maxSpeed);
-  
-  // Convert to absolute speed for PWM
-  int pwmSpeed = map(abs(speed), deadZone, maxSpeed, 0, 255);
-  
+
+  int denom = max(1, maxSpeed - deadZone);
+  int pwm   = ( (int)abs(speed) - deadZone ) * 255 / denom;
+  pwm       = constrain(pwm, 0, 255);
+
   if (speed > 0) {
-    // Forward: pin1 LOW, pin2 PWM
+    // CCW: IN1 low, IN2 PWM
     ledcWrite(pin1, 0);
-    ledcWrite(pin2, pwmSpeed);
+    ledcWrite(pin2, pwm);
   } else {
-    // Reverse: pin1 PWM, pin2 LOW
-    ledcWrite(pin1, pwmSpeed);
+    // CW: IN1 PWM, IN2 low
+    ledcWrite(pin1, pwm);
     ledcWrite(pin2, 0);
   }
 }
 
-// Stop motor
 void Motor::stop() {
   ledcWrite(pin1, 0);
   ledcWrite(pin2, 0);
 }
 
-// Get motor info for debugging
 void Motor::printInfo(const char* name) {
-  Serial.printf("%s Motor: pin1=%d, pin2=%d, ch1=%d, ch2=%d\n", 
-                name, pin1, pin2, channel1, channel2);
+  Serial.printf("%s Motor: pin1=%d, pin2=%d\n", name, pin1, pin2);
 }

@@ -38,7 +38,7 @@ const char* WIFI_PASSWORD = "wawadudu";
 
 // Server Configuration - ONLY PLACE TO CHANGE IP
 // const char* IP = "10.190.61.153";
-const char* IP = "10.131.215.153";
+const char* IP = "10.195.114.153";
 
 const int SERVER_PORT = 8000;
 const int HTTP_PORT = 80;
@@ -75,8 +75,9 @@ CircularBuffer* circularBuffer;
 VideoUploader* videoUploader;
 httpd_handle_t camera_httpd = NULL;
 
-// Motor instance (Single motor on D4=GPIO4, D5=GPIO5, LEDC channels 0,1)
-Motor motor(4, 5, 0, 1, 10, 100);  // deadZone=10, maxSpeed=100
+// Motor instance (Single motor on D3=GPIO3, D4=GPIO4)
+// THIS IS VERY IMPORTANT, NOT ALL PINS WORK!
+Motor motor(3, 4, 10, 100);  // deadZone=10, maxSpeed=100
 
 File videoFile;
 bool camera_sign = false;

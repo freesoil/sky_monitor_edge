@@ -14,14 +14,12 @@
  * 
  * For XIAO ESP32S3 + DRV8833 motor driver:
  * - Recommended GPIO pins: 2, 4, 5, 7, 8, 9 (avoid 0-1, 3, 6, 10-21, 38-48 used by camera/UART)
- * - Use any available LEDC channel (0-7)
- * - Example: Motor leftMotor(2, 4, 0, 1);
- *           Motor rightMotor(5, 7, 2, 3);
+ * - Example: Motor leftMotor(2, 4);
+ *           Motor rightMotor(5, 7);
  */
 class Motor {
 private:
   int pin1, pin2;           // Motor driver pins
-  int channel1, channel2;   // LEDC channels
   int deadZone;             // Dead zone threshold
   int maxSpeed;             // Maximum motor speed
   
@@ -30,12 +28,10 @@ public:
    * Constructor
    * @param p1 Pin connected to motor driver input 1
    * @param p2 Pin connected to motor driver input 2
-   * @param ch1 LEDC channel for pin 1
-   * @param ch2 LEDC channel for pin 2
    * @param dead Dead zone threshold (default 15)
    * @param max Maximum motor speed (default 200)
    */
-  Motor(int p1, int p2, int ch1, int ch2, int dead = 15, int max = 200);
+  Motor(int p1, int p2, int dead = 15, int max = 200);
   
   /**
    * Initialize motor pins and LEDC channels
