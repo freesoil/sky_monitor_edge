@@ -75,8 +75,7 @@ CircularBuffer* circularBuffer;
 VideoUploader* videoUploader;
 httpd_handle_t camera_httpd = NULL;
 
-// Motor instance (Single motor on D3=GPIO3, D4=GPIO4)
-// THIS IS VERY IMPORTANT, NOT ALL PINS WORK!
+// Motor instance (Single motor on D2=GPIO3, D3=GPIO4)
 Motor motor(3, 4, 10, 100);  // deadZone=10, maxSpeed=100
 
 File videoFile;
